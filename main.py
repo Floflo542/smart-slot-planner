@@ -45,9 +45,16 @@ class SuggestRequest(BaseModel):
 
     start_time: str = "07:30"
     end_time: str = "16:30"
-    lunch_start: str = "12:00"
-    lunch_end: str = "12:30"
 
+    # Lunch flexible
+    lunch_window_start: str = "12:00"   # fenêtre début
+    lunch_window_end: str = "14:00"     # fenêtre fin
+    lunch_duration_min: int = 30
+
+    # Buffer entre RDV
+    buffer_min: int = 10
+
+    # V0: estimation temps route
     avg_speed_kmh: float = 60.0
 
 class PlannedStop(BaseModel):
@@ -93,10 +100,15 @@ def health():
 @app.post("/suggest", response_model=SuggestResponse)
 def suggest(req: SuggestRequest):
     day = datetime.fromisoformat(req.date)
+
     start_dt = datetime.combine(day.date(), parse_hhmm(req.start_time))
     end_dt = datetime.combine(day.date(), parse_hhmm(req.end_time))
-    lunch_s = datetime.combine(day.date(), parse_hhmm(req.lunch_start))
-    lunch_e = datetime.combine(day.date(), parse_hhmm(req.lunch_end))
+
+    lunch_ws = datetime.combine(day.date(), parse_hhmm(req.lunch_window_start))
+    lunch_we = datetime.combine(day.date(), parse_hhmm(req.lunch_window_end))
+    lunch_dur = timedelta(minutes=req.lunch_duration_min)
+
+    buffer_td = timedelta(minutes=req.buffer_min)
 
     remaining = req.appointments.copy()
     current_loc = req.home
@@ -105,6 +117,24 @@ def suggest(req: SuggestRequest):
     stops: List[PlannedStop] = []
     unplanned: List[str] = []
 
+    lunch_taken = False
+
+    def can_place_lunch_at(t: datetime) -> bool:
+        return (t >= lunch_ws) and (t + lunch_dur <= lunch_we)
+
+    def place_lunch(at_time: datetime):
+        nonlocal current_time, lunch_taken
+        stops.append(PlannedStop(
+            kind="lunch",
+            label="Lunch",
+            start=at_time.isoformat(),
+            end=(at_time + lunch_dur).isoformat(),
+            travel_min_from_prev=0
+        ))
+        current_time = at_time + lunch_dur
+        lunch_taken = True
+
+    # Start at home
     stops.append(PlannedStop(
         kind="home",
         label=f"Home: {req.home.label}",
@@ -113,38 +143,55 @@ def suggest(req: SuggestRequest):
         travel_min_from_prev=0
     ))
 
-    def add_lunch_if_needed():
-        nonlocal current_time
-        if lunch_s <= current_time < lunch_e:
-            stops.append(PlannedStop(
-                kind="lunch",
-                label="Lunch",
-                start=current_time.isoformat(),
-                end=lunch_e.isoformat(),
-                travel_min_from_prev=0
-            ))
-            current_time = lunch_e
-
     while remaining:
-        add_lunch_if_needed()
+        # --- Strategy lunch (flex 12-14, 30min) ---
+        # If we are already inside the window and lunch not taken -> take it ASAP (unless too late to fit)
+        if (not lunch_taken) and can_place_lunch_at(current_time):
+            place_lunch(current_time)
+            continue
 
+        # pick next closest
         remaining.sort(key=lambda ap: haversine_km(
             (current_loc.lat, current_loc.lon),
             (ap.location.lat, ap.location.lon)
         ))
         candidate = remaining[0]
+        dur_min = candidate.duration_min or DURATION_MIN[candidate.type]
+        dur_td = timedelta(minutes=dur_min)
 
-        dur = candidate.duration_min or DURATION_MIN[candidate.type]
         travel = travel_minutes(current_loc, candidate.location, req.avg_speed_kmh)
-
         arrival = current_time + timedelta(minutes=travel)
+
         start_ap = arrival
 
-        if start_ap < lunch_e and (start_ap + timedelta(minutes=dur)) > lunch_s:
-            start_ap = lunch_e
+        # If lunch not taken and appointment would collide with lunch window,
+        # we try to place lunch at the best possible moment.
+        if not lunch_taken:
+            # Case 1: appointment would start before lunch window but run into it
+            if start_ap < lunch_ws and (start_ap + dur_td) > lunch_ws:
+                # take lunch at lunch_ws (if possible)
+                if can_place_lunch_at(lunch_ws):
+                    place_lunch(lunch_ws)
+                    continue
 
-        end_ap = start_ap + timedelta(minutes=dur)
+            # Case 2: appointment would start during lunch window
+            if lunch_ws <= start_ap < lunch_we:
+                # place lunch at start_ap if it fits, else at earliest in window
+                t = start_ap
+                if not can_place_lunch_at(t):
+                    t = lunch_ws
+                if can_place_lunch_at(t):
+                    place_lunch(t)
+                    continue
+                # if lunch can't fit anymore, we skip lunch (rare), continue scheduling
 
+        # After lunch logic, recompute start (current_time may have moved)
+        travel = travel_minutes(current_loc, candidate.location, req.avg_speed_kmh)
+        arrival = current_time + timedelta(minutes=travel)
+        start_ap = arrival
+        end_ap = start_ap + dur_td
+
+        # bounds check
         if end_ap > end_dt:
             unplanned.append(candidate.id)
             remaining = [x for x in remaining if x.id != candidate.id]
@@ -159,10 +206,16 @@ def suggest(req: SuggestRequest):
             travel_min_from_prev=travel
         ))
 
-        current_time = end_ap
+        # move time forward: appointment + buffer
+        current_time = end_ap + buffer_td
         current_loc = candidate.location
         remaining = [x for x in remaining if x.id != candidate.id]
 
+    # If lunch still not taken, and we are before end of lunch window, place it at the earliest possible slot
+    if (not lunch_taken) and can_place_lunch_at(max(current_time, lunch_ws)):
+        place_lunch(max(current_time, lunch_ws))
+
+    # return home
     travel_home = travel_minutes(current_loc, req.home, req.avg_speed_kmh)
     arrive_home = current_time + timedelta(minutes=travel_home)
     if arrive_home <= end_dt:
@@ -175,4 +228,6 @@ def suggest(req: SuggestRequest):
         ))
 
     return SuggestResponse(stops=stops, unplanned=unplanned)
+
+
 
