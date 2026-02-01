@@ -5,7 +5,7 @@ import { useState } from "react";
 export default function Home() {
   const [status, setStatus] = useState("Idle");
 
-  async function testApi() {
+  async function testHealth() {
     try {
       const url = `/api/health`;
       setStatus(`⏳ Test en cours… (${url})`);
@@ -13,23 +13,66 @@ export default function Home() {
       const res = await fetch(url, { cache: "no-store" });
       const text = await res.text();
 
-      setStatus(`✅ HTTP ${res.status} — ${text}`);
+      setStatus(`✅ /health HTTP ${res.status} — ${text}`);
     } catch (err: any) {
-      setStatus(`❌ Erreur: ${err?.message || String(err)}`);
+      setStatus(`❌ /health erreur: ${err?.message || String(err)}`);
+    }
+  }
+
+  async function testSuggest() {
+    try {
+      const payload = {
+        date: "2026-02-02",
+        home: { label: "Maison", lat: 50.85, lon: 4.35 },
+        appointments: [
+          {
+            id: "A1",
+            type: "demo",
+            location: { label: "Client 1", lat: 50.83, lon: 4.37 },
+          },
+          {
+            id: "A2",
+            type: "training",
+            location: { label: "Client 2", lat: 50.88, lon: 4.30 },
+          },
+        ],
+      };
+
+      setStatus(`⏳ Test /suggest en cours…\n${JSON.stringify(payload, null, 2)}`);
+
+      const res = await fetch("/api/suggest", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      const text = await res.text();
+      setStatus(`✅ /suggest HTTP ${res.status}\n${text}`);
+    } catch (err: any) {
+      setStatus(`❌ /suggest erreur: ${err?.message || String(err)}`);
     }
   }
 
   return (
     <main style={{ padding: 24, fontFamily: "system-ui" }}>
       <h1>Smart Slot Planner</h1>
-      <p>Test connexion backend Railway</p>
+      <p>Tests API (via proxy Vercel)</p>
 
-      <button
-        onClick={testApi}
-        style={{ padding: "10px 14px", borderRadius: 8, cursor: "pointer" }}
-      >
-        Tester l’API
-      </button>
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+        <button
+          onClick={testHealth}
+          style={{ padding: "10px 14px", borderRadius: 8, cursor: "pointer" }}
+        >
+          Tester /health
+        </button>
+
+        <button
+          onClick={testSuggest}
+          style={{ padding: "10px 14px", borderRadius: 8, cursor: "pointer" }}
+        >
+          Tester /suggest
+        </button>
+      </div>
 
       <pre
         style={{
@@ -37,6 +80,8 @@ export default function Home() {
           padding: 12,
           border: "1px solid #ddd",
           borderRadius: 8,
+          whiteSpace: "pre-wrap",
+          wordBreak: "break-word",
         }}
       >
         {status}
