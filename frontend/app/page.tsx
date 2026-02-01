@@ -1,18 +1,71 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
+
+type StopKind = "home" | "appointment" | "lunch";
+
+type PlannedStop = {
+  kind: StopKind;
+  id: string | null;
+  label: string;
+  start: string; // ISO
+  end: string;   // ISO
+  travel_min_from_prev: number;
+};
+
+type Analysis = {
+  score: number;
+  total_travel_min: number;
+  idle_min: number;
+  long_idle_blocks_min: number[];
+  planned_appointments: number;
+  unplanned_appointments: number;
+  recommendations: string[];
+};
+
+type Variant = {
+  name: string;
+  stops: PlannedStop[];
+  unplanned: string[];
+  analysis: Analysis;
+};
+
+type SuggestResponse = {
+  best: Variant;
+  variants: Variant[];
+};
+
+function hhmm(iso: string) {
+  const d = new Date(iso);
+  // garde l'heure locale (important)
+  const h = String(d.getHours()).padStart(2, "0");
+  const m = String(d.getMinutes()).padStart(2, "0");
+  return `${h}:${m}`;
+}
+
+function minutesBetween(aIso: string, bIso: string) {
+  const a = new Date(aIso).getTime();
+  const b = new Date(bIso).getTime();
+  return Math.max(0, Math.round((b - a) / 60000));
+}
+
+function badge(kind: StopKind) {
+  if (kind === "home") return { t: "HOME", bg: "#1f2937" };
+  if (kind === "lunch") return { t: "LUNCH", bg: "#7c2d12" };
+  return { t: "RDV", bg: "#064e3b" };
+}
 
 export default function Home() {
-  const [status, setStatus] = useState("Idle");
+  const [status, setStatus] = useState<string>("Idle");
+  const [data, setData] = useState<SuggestResponse | null>(null);
+  const [selected, setSelected] = useState<string>("best");
+  const [showDebug, setShowDebug] = useState<boolean>(false);
 
   async function testHealth() {
     try {
-      const url = `/api/health`;
-      setStatus(`⏳ Test en cours… (${url})`);
-
-      const res = await fetch(url, { cache: "no-store" });
+      setStatus("⏳ Test /health...");
+      const res = await fetch("/api/health", { cache: "no-store" });
       const text = await res.text();
-
       setStatus(`✅ /health HTTP ${res.status} — ${text}`);
     } catch (err: any) {
       setStatus(`❌ /health erreur: ${err?.message || String(err)}`);
@@ -25,67 +78,250 @@ export default function Home() {
         date: "2026-02-02",
         home: { label: "Maison", lat: 50.85, lon: 4.35 },
         appointments: [
-          {
-            id: "A1",
-            type: "demo",
-            location: { label: "Client 1", lat: 50.83, lon: 4.37 },
-          },
-          {
-            id: "A2",
-            type: "training",
-            location: { label: "Client 2", lat: 50.88, lon: 4.30 },
-          },
+          { id: "A1", type: "demo", location: { label: "Client 1", lat: 50.83, lon: 4.37 } },
+          { id: "A2", type: "training", location: { label: "Client 2", lat: 50.88, lon: 4.30 } },
         ],
       };
 
-      setStatus(`⏳ Test /suggest en cours…\n${JSON.stringify(payload, null, 2)}`);
-
+      setStatus("⏳ Test /suggest...");
       const res = await fetch("/api/suggest", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(payload),
       });
 
-      const text = await res.text();
-      setStatus(`✅ /suggest HTTP ${res.status}\n${text}`);
+      const json = (await res.json()) as SuggestResponse;
+      setData(json);
+      setSelected("best");
+      setStatus(`✅ /suggest HTTP ${res.status}`);
     } catch (err: any) {
       setStatus(`❌ /suggest erreur: ${err?.message || String(err)}`);
     }
   }
 
-  return (
-    <main style={{ padding: 24, fontFamily: "system-ui" }}>
-      <h1>Smart Slot Planner</h1>
-      <p>Tests API (via proxy Vercel)</p>
+  const chosen: Variant | null = useMemo(() => {
+    if (!data) return null;
+    if (selected === "best") return data.best;
+    return data.variants.find((v) => v.name === selected) || data.best;
+  }, [data, selected]);
 
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+  const variantNames = useMemo(() => {
+    if (!data) return [];
+    return ["best", ...data.variants.map((v) => v.name)];
+  }, [data]);
+
+  const agendaRows = useMemo(() => {
+    if (!chosen) return [];
+    const s = chosen.stops;
+
+    return s.map((stop, i) => {
+      const prev = i > 0 ? s[i - 1] : null;
+      const gapMin = prev ? minutesBetween(prev.end, stop.start) : 0;
+
+      return {
+        stop,
+        gapMin,
+        start: hhmm(stop.start),
+        end: hhmm(stop.end),
+        badge: badge(stop.kind),
+      };
+    });
+  }, [chosen]);
+
+  return (
+    <main style={{ padding: 24, fontFamily: "system-ui", maxWidth: 980, margin: "0 auto" }}>
+      <h1 style={{ margin: 0, fontSize: 28 }}>Smart Slot Planner</h1>
+      <p style={{ marginTop: 8, opacity: 0.8 }}>Assistant planning — version agenda</p>
+
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 12 }}>
         <button
           onClick={testHealth}
-          style={{ padding: "10px 14px", borderRadius: 8, cursor: "pointer" }}
+          style={{ padding: "10px 14px", borderRadius: 10, cursor: "pointer" }}
         >
           Tester /health
         </button>
 
         <button
           onClick={testSuggest}
-          style={{ padding: "10px 14px", borderRadius: 8, cursor: "pointer" }}
+          style={{ padding: "10px 14px", borderRadius: 10, cursor: "pointer" }}
         >
           Tester /suggest
         </button>
+
+        <button
+          onClick={() => setShowDebug((x) => !x)}
+          style={{ padding: "10px 14px", borderRadius: 10, cursor: "pointer" }}
+        >
+          {showDebug ? "Masquer debug JSON" : "Afficher debug JSON"}
+        </button>
       </div>
 
-      <pre
+      <div
         style={{
-          marginTop: 16,
+          marginTop: 14,
           padding: 12,
-          border: "1px solid #ddd",
-          borderRadius: 8,
-          whiteSpace: "pre-wrap",
-          wordBreak: "break-word",
+          border: "1px solid #2b2b2b",
+          borderRadius: 12,
+          background: "#0b0b0b",
+          color: "#eaeaea",
         }}
       >
         {status}
-      </pre>
+      </div>
+
+      {!data || !chosen ? null : (
+        <>
+          {/* Selector */}
+          <div style={{ marginTop: 18, display: "flex", gap: 10, flexWrap: "wrap" }}>
+            {variantNames.map((name) => {
+              const active = selected === name;
+              const label =
+                name === "best" ? `Recommandée (${data.best.name})` : name;
+
+              return (
+                <button
+                  key={name}
+                  onClick={() => setSelected(name)}
+                  style={{
+                    padding: "8px 12px",
+                    borderRadius: 999,
+                    cursor: "pointer",
+                    border: active ? "1px solid #fff" : "1px solid #333",
+                    background: active ? "#111" : "#000",
+                    color: "#fff",
+                  }}
+                  title={name}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Summary cards */}
+          <div
+            style={{
+              marginTop: 16,
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+              gap: 12,
+            }}
+          >
+            <div style={{ border: "1px solid #e5e5e5", borderRadius: 14, padding: 12 }}>
+              <div style={{ fontSize: 12, opacity: 0.7 }}>Score</div>
+              <div style={{ fontSize: 32, fontWeight: 700 }}>{chosen.analysis.score}</div>
+              <div style={{ fontSize: 12, opacity: 0.7 }}>/ 100</div>
+            </div>
+
+            <div style={{ border: "1px solid #e5e5e5", borderRadius: 14, padding: 12 }}>
+              <div style={{ fontSize: 12, opacity: 0.7 }}>Route totale</div>
+              <div style={{ fontSize: 28, fontWeight: 700 }}>{chosen.analysis.total_travel_min} min</div>
+              <div style={{ fontSize: 12, opacity: 0.7 }}>estimation</div>
+            </div>
+
+            <div style={{ border: "1px solid #e5e5e5", borderRadius: 14, padding: 12 }}>
+              <div style={{ fontSize: 12, opacity: 0.7 }}>Temps mort</div>
+              <div style={{ fontSize: 28, fontWeight: 700 }}>{chosen.analysis.idle_min} min</div>
+              <div style={{ fontSize: 12, opacity: 0.7 }}>hors route/buffer</div>
+            </div>
+
+            <div style={{ border: "1px solid #e5e5e5", borderRadius: 14, padding: 12 }}>
+              <div style={{ fontSize: 12, opacity: 0.7 }}>RDV</div>
+              <div style={{ fontSize: 28, fontWeight: 700 }}>
+                {chosen.analysis.planned_appointments} planifiés
+              </div>
+              <div style={{ fontSize: 12, opacity: 0.7 }}>
+                {chosen.analysis.unplanned_appointments} non planifiés
+              </div>
+            </div>
+          </div>
+
+          {/* Recommendations */}
+          <div style={{ marginTop: 16, border: "1px solid #e5e5e5", borderRadius: 14, padding: 12 }}>
+            <div style={{ fontWeight: 700, marginBottom: 8 }}>Recommandations</div>
+            <ul style={{ margin: 0, paddingLeft: 18 }}>
+              {chosen.analysis.recommendations.map((r, idx) => (
+                <li key={idx} style={{ marginBottom: 6 }}>
+                  {r}
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          {/* Agenda */}
+          <div style={{ marginTop: 16, border: "1px solid #e5e5e5", borderRadius: 14, padding: 12 }}>
+            <div style={{ fontWeight: 700, marginBottom: 10 }}>Planning (agenda)</div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", gap: 10 }}>
+              {agendaRows.map((row, idx) => (
+                <div key={idx} style={{ display: "contents" }}>
+                  {/* Time column */}
+                  <div style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>
+                    <div style={{ fontWeight: 700 }}>{row.start}</div>
+                    <div style={{ opacity: 0.7 }}>{row.end}</div>
+                    {idx > 0 && row.gapMin > 0 ? (
+                      <div style={{ marginTop: 6, fontSize: 12, opacity: 0.7 }}>
+                        +{row.gapMin} min (gap)
+                      </div>
+                    ) : null}
+                  </div>
+
+                  {/* Event column */}
+                  <div
+                    style={{
+                      padding: 12,
+                      borderRadius: 14,
+                      border: "1px solid #ddd",
+                      position: "relative",
+                      overflow: "hidden",
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "inline-block",
+                        padding: "4px 10px",
+                        borderRadius: 999,
+                        background: row.badge.bg,
+                        color: "#fff",
+                        fontSize: 12,
+                        fontWeight: 700,
+                        marginBottom: 8,
+                      }}
+                    >
+                      {row.badge.t}
+                    </div>
+
+                    <div style={{ fontSize: 16, fontWeight: 700 }}>{row.stop.label}</div>
+
+                    <div style={{ marginTop: 6, fontSize: 12, opacity: 0.75 }}>
+                      Route depuis précédent: {row.stop.travel_min_from_prev} min
+                      {row.stop.kind === "appointment" && row.stop.id ? ` • ID: ${row.stop.id}` : ""}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Debug JSON */}
+          {showDebug ? (
+            <pre
+              style={{
+                marginTop: 16,
+                padding: 12,
+                border: "1px solid #2b2b2b",
+                borderRadius: 12,
+                background: "#0b0b0b",
+                color: "#eaeaea",
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+              }}
+            >
+              {JSON.stringify(data, null, 2)}
+            </pre>
+          ) : null}
+        </>
+      )}
     </main>
   );
 }
