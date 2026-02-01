@@ -111,6 +111,71 @@ export default function Home() {
       setStatus(`❌ /suggest erreur: ${err?.message || String(err)}`);
     }
   }
+         <button
+          onClick={testSuggestRealDay}
+          style={{ padding: "10px 14px", borderRadius: 10, cursor: "pointer" }}
+        >
+          Journée réaliste (15 RDV)
+        </button>
+
+  async function testSuggestRealDay() {
+    try {
+      // Journée "Belgique" réaliste (Bruxelles + alentours + un détour type Liège)
+      const payload = {
+        date: "2026-02-02",
+        home: { label: "Maison", lat: 50.85, lon: 4.35 }, // Bruxelles approx
+        start_time: "07:30",
+        end_time: "16:30",
+        buffer_min: 10,
+        lunch_window_start: "12:00",
+        lunch_window_end: "14:00",
+        lunch_duration_min: 30,
+        avg_speed_kmh: 60,
+        appointments: [
+          { id: "A1", type: "reseller", location: { label: "Revendeur Anderlecht", lat: 50.836, lon: 4.309 } },
+          { id: "A2", type: "demo",     location: { label: "Client Uccle", lat: 50.803, lon: 4.331 } },
+          { id: "A3", type: "training", location: { label: "Site Forest", lat: 50.811, lon: 4.319 } },
+
+          { id: "A4", type: "reseller", location: { label: "Revendeur Ixelles", lat: 50.828, lon: 4.372 } },
+          { id: "A5", type: "demo",     location: { label: "Client Etterbeek", lat: 50.835, lon: 4.392 } },
+
+          { id: "A6", type: "training", location: { label: "Client Zaventem", lat: 50.885, lon: 4.470 } },
+          { id: "A7", type: "reseller", location: { label: "Revendeur Vilvoorde", lat: 50.928, lon: 4.429 } },
+
+          // petit saut plus loin (pour déclencher des différences de variantes)
+          { id: "A8", type: "demo",     location: { label: "Client Mechelen", lat: 51.025, lon: 4.477 } },
+          { id: "A9", type: "reseller", location: { label: "Revendeur Leuven", lat: 50.879, lon: 4.700 } },
+
+          // Détour "gros" type Liège (rare mais réaliste)
+          { id: "A10", type: "training", location: { label: "Formation Liège", lat: 50.633, lon: 5.567 } },
+
+          // retour zone centre
+          { id: "A11", type: "demo",     location: { label: "Client Wavre", lat: 50.716, lon: 4.612 } },
+          { id: "A12", type: "reseller", location: { label: "Revendeur Waterloo", lat: 50.718, lon: 4.399 } },
+
+          { id: "A13", type: "demo",     location: { label: "Client Nivelles", lat: 50.597, lon: 4.329 } },
+          { id: "A14", type: "training", location: { label: "Client Charleroi", lat: 50.410, lon: 4.444 } },
+
+          // un dernier “petit” pour tester la fin de journée
+          { id: "A15", type: "reseller", location: { label: "Revendeur Halle", lat: 50.733, lon: 4.235 } },
+        ],
+      };
+
+      setStatus("⏳ Test /suggest (journée réaliste)...");
+      const res = await fetch("/api/suggest", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      const json = (await res.json()) as SuggestResponse;
+      setData(json);
+      setSelected("best");
+      setStatus(`✅ /suggest (journée réaliste) HTTP ${res.status}`);
+    } catch (err: any) {
+      setStatus(`❌ /suggest (journée réaliste) erreur: ${err?.message || String(err)}`);
+    }
+  }
 
   const chosen: Variant | null = useMemo(() => {
     if (!data) return null;
