@@ -85,7 +85,7 @@ export default function Home() {
     }
   }
 
-  async function testSuggest() {
+  async function testSuggestSmall() {
     try {
       const payload = {
         date: "2026-02-02",
@@ -96,7 +96,7 @@ export default function Home() {
         ],
       };
 
-      setStatus("⏳ Test /suggest...");
+      setStatus("⏳ Test /suggest (petit)...");
       const res = await fetch("/api/suggest", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -106,21 +106,14 @@ export default function Home() {
       const json = (await res.json()) as SuggestResponse;
       setData(json);
       setSelected("best");
-      setStatus(`✅ /suggest HTTP ${res.status}`);
+      setStatus(`✅ /suggest (petit) HTTP ${res.status}`);
     } catch (err: any) {
-      setStatus(`❌ /suggest erreur: ${err?.message || String(err)}`);
+      setStatus(`❌ /suggest (petit) erreur: ${err?.message || String(err)}`);
     }
   }
-         <button
-          onClick={testSuggestRealDay}
-          style={{ padding: "10px 14px", borderRadius: 10, cursor: "pointer" }}
-        >
-          Journée réaliste (15 RDV)
-        </button>
 
   async function testSuggestRealDay() {
     try {
-      // Journée "Belgique" réaliste (Bruxelles + alentours + un détour type Liège)
       const payload = {
         date: "2026-02-02",
         home: { label: "Maison", lat: 50.85, lon: 4.35 }, // Bruxelles approx
@@ -142,21 +135,17 @@ export default function Home() {
           { id: "A6", type: "training", location: { label: "Client Zaventem", lat: 50.885, lon: 4.470 } },
           { id: "A7", type: "reseller", location: { label: "Revendeur Vilvoorde", lat: 50.928, lon: 4.429 } },
 
-          // petit saut plus loin (pour déclencher des différences de variantes)
           { id: "A8", type: "demo",     location: { label: "Client Mechelen", lat: 51.025, lon: 4.477 } },
           { id: "A9", type: "reseller", location: { label: "Revendeur Leuven", lat: 50.879, lon: 4.700 } },
 
-          // Détour "gros" type Liège (rare mais réaliste)
           { id: "A10", type: "training", location: { label: "Formation Liège", lat: 50.633, lon: 5.567 } },
 
-          // retour zone centre
           { id: "A11", type: "demo",     location: { label: "Client Wavre", lat: 50.716, lon: 4.612 } },
           { id: "A12", type: "reseller", location: { label: "Revendeur Waterloo", lat: 50.718, lon: 4.399 } },
 
           { id: "A13", type: "demo",     location: { label: "Client Nivelles", lat: 50.597, lon: 4.329 } },
           { id: "A14", type: "training", location: { label: "Client Charleroi", lat: 50.410, lon: 4.444 } },
 
-          // un dernier “petit” pour tester la fin de journée
           { id: "A15", type: "reseller", location: { label: "Revendeur Halle", lat: 50.733, lon: 4.235 } },
         ],
       };
@@ -216,8 +205,12 @@ export default function Home() {
           Tester /health
         </button>
 
-        <button onClick={testSuggest} style={{ padding: "10px 14px", borderRadius: 10, cursor: "pointer" }}>
-          Tester /suggest
+        <button onClick={testSuggestSmall} style={{ padding: "10px 14px", borderRadius: 10, cursor: "pointer" }}>
+          Test /suggest (2 RDV)
+        </button>
+
+        <button onClick={testSuggestRealDay} style={{ padding: "10px 14px", borderRadius: 10, cursor: "pointer" }}>
+          Journée réaliste (15 RDV)
         </button>
 
         <button onClick={() => setShowDebug((x) => !x)} style={{ padding: "10px 14px", borderRadius: 10, cursor: "pointer" }}>
