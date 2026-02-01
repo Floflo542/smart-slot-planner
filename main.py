@@ -246,11 +246,10 @@ def compute_analysis(req: SuggestRequest, stops: List[PlannedStop], unplanned: L
     total_travel = sum(s.travel_min_from_prev for s in stops)
     planned_appointments = sum(1 for s in stops if s.kind == "appointment")
 
-    # Compute idle time excluding travel and excluding buffer (buffer is neutral)
+    # Compute idle time excluding travel and excluding buffer
     idle_min = 0
     long_blocks: List[int] = []
 
-    # Rebuild datetimes
     dt_starts = [datetime.fromisoformat(s.start) for s in stops]
     dt_ends = [datetime.fromisoformat(s.end) for s in stops]
 
@@ -259,10 +258,7 @@ def compute_analysis(req: SuggestRequest, stops: List[PlannedStop], unplanned: L
         gap = dt_starts[i] - dt_ends[i - 1]
         gap_min = max(0, int(gap.total_seconds() // 60))
 
-        # subtract travel (already accounted separately)
         travel = stops[i].travel_min_from_prev
-
-        # subtract buffer if previous was appointment (since we deliberately add it)
         buf = buffer_min if prev.kind == "appointment" else 0
 
         effective_idle = max(0, gap_min - travel - buf)
@@ -270,19 +266,17 @@ def compute_analysis(req: SuggestRequest, stops: List[PlannedStop], unplanned: L
         if effective_idle >= 45:
             long_blocks.append(effective_idle)
 
-    # Multi-objective score (tunable)
-    # - reward appointments
-    # - penalize travel
-    # - penalize idle
-    # - huge penalty for long idle blocks
-    score = 0
-    score += planned_appointments * 120
-    score -= total_travel * 2
-    score -= idle_min * 5
-    score -= sum(50 for _ in long_blocks)
+    # --- NEW SCORE (0..100, human-friendly) ---
+    score = 100.0
+    score -= 0.6 * total_travel
+    score -= 1.2 * idle_min
+    score -= 20.0 * len(long_blocks)
+    score -= 15.0 * len(unplanned)
 
-    # clamp to 0..100 for readability
-    score_0_100 = max(0, min(100, int(round(score / 10))))
+    # small bonus for having more appointments (cap)
+    score += min(10.0, planned_appointments * 2.0)
+
+    score_0_100 = int(max(0, min(100, round(score))))
 
     rec: List[str] = []
     if long_blocks:
@@ -291,11 +285,10 @@ def compute_analysis(req: SuggestRequest, stops: List[PlannedStop], unplanned: L
     else:
         rec.append("✅ Pas de trou > 45 min. Planning fluide.")
 
-    if idle_min > 0 and not long_blocks:
+    if idle_min > 0:
         rec.append(f"Temps mort total (hors route/buffer): {idle_min} min.")
 
-    if total_travel > 120:
-        rec.append("⚠️ Beaucoup de route. Variante 'short_drive' à privilégier si possible.")
+    rec.append(f"Route totale estimée: {total_travel} min.")
 
     if unplanned:
         rec.append(f"⚠️ RDV non planifiés: {len(unplanned)} (trop dense / trop loin / fin 16:30).")
