@@ -11,22 +11,13 @@ export async function GET() {
     );
   }
 
-  const url = `${base}/health`;
+  const upstream = await fetch(`${base}/health`, { cache: "no-store" });
+  const text = await upstream.text();
 
-  try {
-    const res = await fetch(url, { cache: "no-store" });
-    const text = await res.text();
-
-    return new NextResponse(text, {
-      status: res.status,
-      headers: {
-        "content-type": res.headers.get("content-type") || "application/json",
-      },
-    });
-  } catch (e: any) {
-    return NextResponse.json(
-      { ok: false, error: e?.message || String(e) },
-      { status: 502 }
-    );
-  }
+  return new NextResponse(text, {
+    status: upstream.status,
+    headers: {
+      "content-type": upstream.headers.get("content-type") || "application/json",
+    },
+  });
 }

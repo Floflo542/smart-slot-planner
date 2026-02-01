@@ -12,7 +12,6 @@ export async function POST(req: Request) {
   }
 
   const body = await req.text();
-
   const upstream = await fetch(`${base}/suggest`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -20,7 +19,6 @@ export async function POST(req: Request) {
   });
 
   const text = await upstream.text();
-
   return new NextResponse(text, {
     status: upstream.status,
     headers: {

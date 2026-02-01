@@ -8,9 +8,16 @@ type PlannedStop = {
   kind: StopKind;
   id: string | null;
   label: string;
-  start: string; // ISO
-  end: string;   // ISO
+  start: string;
+  end: string;
   travel_min_from_prev: number;
+};
+
+type PlanAlert = {
+  level: "info" | "warn" | "critical";
+  type: "idle" | "travel" | "lunch" | "back_home" | "swap";
+  message: string;
+  impact?: string | null;
 };
 
 type Analysis = {
@@ -21,6 +28,7 @@ type Analysis = {
   planned_appointments: number;
   unplanned_appointments: number;
   recommendations: string[];
+  alerts?: PlanAlert[];
 };
 
 type Variant = {
@@ -37,7 +45,6 @@ type SuggestResponse = {
 
 function hhmm(iso: string) {
   const d = new Date(iso);
-  // garde l'heure locale (important)
   const h = String(d.getHours()).padStart(2, "0");
   const m = String(d.getMinutes()).padStart(2, "0");
   return `${h}:${m}`;
@@ -53,6 +60,12 @@ function badge(kind: StopKind) {
   if (kind === "home") return { t: "HOME", bg: "#1f2937" };
   if (kind === "lunch") return { t: "LUNCH", bg: "#7c2d12" };
   return { t: "RDV", bg: "#064e3b" };
+}
+
+function levelColor(level: PlanAlert["level"]) {
+  if (level === "critical") return "#991b1b";
+  if (level === "warn") return "#9a3412";
+  return "#1f2937";
 }
 
 export default function Home() {
@@ -134,24 +147,15 @@ export default function Home() {
       <p style={{ marginTop: 8, opacity: 0.8 }}>Assistant planning — version agenda</p>
 
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 12 }}>
-        <button
-          onClick={testHealth}
-          style={{ padding: "10px 14px", borderRadius: 10, cursor: "pointer" }}
-        >
+        <button onClick={testHealth} style={{ padding: "10px 14px", borderRadius: 10, cursor: "pointer" }}>
           Tester /health
         </button>
 
-        <button
-          onClick={testSuggest}
-          style={{ padding: "10px 14px", borderRadius: 10, cursor: "pointer" }}
-        >
+        <button onClick={testSuggest} style={{ padding: "10px 14px", borderRadius: 10, cursor: "pointer" }}>
           Tester /suggest
         </button>
 
-        <button
-          onClick={() => setShowDebug((x) => !x)}
-          style={{ padding: "10px 14px", borderRadius: 10, cursor: "pointer" }}
-        >
+        <button onClick={() => setShowDebug((x) => !x)} style={{ padding: "10px 14px", borderRadius: 10, cursor: "pointer" }}>
           {showDebug ? "Masquer debug JSON" : "Afficher debug JSON"}
         </button>
       </div>
@@ -175,8 +179,7 @@ export default function Home() {
           <div style={{ marginTop: 18, display: "flex", gap: 10, flexWrap: "wrap" }}>
             {variantNames.map((name) => {
               const active = selected === name;
-              const label =
-                name === "best" ? `Recommandée (${data.best.name})` : name;
+              const label = name === "best" ? `Recommandée (${data.best.name})` : name;
 
               return (
                 <button
@@ -190,7 +193,6 @@ export default function Home() {
                     background: active ? "#111" : "#000",
                     color: "#fff",
                   }}
-                  title={name}
                 >
                   {label}
                 </button>
@@ -227,12 +229,8 @@ export default function Home() {
 
             <div style={{ border: "1px solid #e5e5e5", borderRadius: 14, padding: 12 }}>
               <div style={{ fontSize: 12, opacity: 0.7 }}>RDV</div>
-              <div style={{ fontSize: 28, fontWeight: 700 }}>
-                {chosen.analysis.planned_appointments} planifiés
-              </div>
-              <div style={{ fontSize: 12, opacity: 0.7 }}>
-                {chosen.analysis.unplanned_appointments} non planifiés
-              </div>
+              <div style={{ fontSize: 28, fontWeight: 700 }}>{chosen.analysis.planned_appointments} planifiés</div>
+              <div style={{ fontSize: 12, opacity: 0.7 }}>{chosen.analysis.unplanned_appointments} non planifiés</div>
             </div>
           </div>
 
@@ -248,6 +246,37 @@ export default function Home() {
             </ul>
           </div>
 
+          {/* Alerts */}
+          {chosen.analysis.alerts && chosen.analysis.alerts.length ? (
+            <div style={{ marginTop: 16, border: "1px solid #e5e5e5", borderRadius: 14, padding: 12 }}>
+              <div style={{ fontWeight: 700, marginBottom: 8 }}>Alertes</div>
+              <ul style={{ margin: 0, paddingLeft: 18 }}>
+                {chosen.analysis.alerts.map((a, idx) => (
+                  <li key={idx} style={{ marginBottom: 10 }}>
+                    <span
+                      style={{
+                        display: "inline-block",
+                        padding: "3px 10px",
+                        borderRadius: 999,
+                        background: levelColor(a.level),
+                        color: "#fff",
+                        fontSize: 12,
+                        fontWeight: 700,
+                        marginRight: 8,
+                      }}
+                    >
+                      {a.level.toUpperCase()}
+                    </span>
+                    {a.message}
+                    {a.impact ? (
+                      <div style={{ opacity: 0.75, fontSize: 12, marginTop: 4 }}>Impact: {a.impact}</div>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
           {/* Agenda */}
           <div style={{ marginTop: 16, border: "1px solid #e5e5e5", borderRadius: 14, padding: 12 }}>
             <div style={{ fontWeight: 700, marginBottom: 10 }}>Planning (agenda)</div>
@@ -255,18 +284,14 @@ export default function Home() {
             <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", gap: 10 }}>
               {agendaRows.map((row, idx) => (
                 <div key={idx} style={{ display: "contents" }}>
-                  {/* Time column */}
                   <div style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>
                     <div style={{ fontWeight: 700 }}>{row.start}</div>
                     <div style={{ opacity: 0.7 }}>{row.end}</div>
                     {idx > 0 && row.gapMin > 0 ? (
-                      <div style={{ marginTop: 6, fontSize: 12, opacity: 0.7 }}>
-                        +{row.gapMin} min (gap)
-                      </div>
+                      <div style={{ marginTop: 6, fontSize: 12, opacity: 0.7 }}>+{row.gapMin} min (gap)</div>
                     ) : null}
                   </div>
 
-                  {/* Event column */}
                   <div
                     style={{
                       padding: 12,
