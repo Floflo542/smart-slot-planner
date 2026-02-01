@@ -3,20 +3,20 @@
 import { useState } from "react";
 
 export default function Home() {
-  const [status, setStatus] = useState<string>("Idle");
+  const [status, setStatus] = useState("Idle");
+  const base = process.env.NEXT_PUBLIC_API_BASE_URL;
 
   async function testApi() {
     try {
-      const base = process.env.NEXT_PUBLIC_API_BASE_URL;
-
       if (!base) {
-        setStatus("❌ NEXT_PUBLIC_API_BASE_URL est vide (env var non chargée sur Vercel)");
+        setStatus("❌ NEXT_PUBLIC_API_BASE_URL est NON DÉFINIE sur Vercel");
         return;
       }
 
-      setStatus(`⏳ Test en cours… (${base}/health)`);
+      const url = `${base}/health`;
+      setStatus(`⏳ Test en cours… (${url})`);
 
-      const res = await fetch(`${base}/health`, { cache: "no-store" });
+      const res = await fetch(url, { cache: "no-store" });
       const text = await res.text();
 
       setStatus(`✅ HTTP ${res.status} — ${text}`);
@@ -29,6 +29,10 @@ export default function Home() {
     <main style={{ padding: 24, fontFamily: "system-ui" }}>
       <h1>Smart Slot Planner</h1>
       <p>Test connexion backend Railway</p>
+
+      <p>
+        <b>API Base:</b> {base || "❌ NON DÉFINIE"}
+      </p>
 
       <button
         onClick={testApi}
