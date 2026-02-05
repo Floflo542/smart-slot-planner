@@ -11,8 +11,9 @@
   --border: rgba(16, 42, 43, 0.12);
   --shadow: 0 24px 60px rgba(15, 23, 42, 0.12);
 
-  --font-sans: var(--font-sora);
-  --font-mono: var(--font-plex-mono);
+  --font-sans: "Sora", "Avenir Next", "Segoe UI", "Helvetica Neue", sans-serif;
+  --font-mono: "IBM Plex Mono", "SFMono-Regular", "Menlo", "Consolas",
+    "Liberation Mono", monospace;
 }
 
 * {
@@ -27,7 +28,7 @@ body {
     radial-gradient(800px 420px at 90% 10%, rgba(249, 115, 22, 0.16), transparent 55%),
     linear-gradient(180deg, var(--bg), var(--bg-2));
   color: var(--ink);
-  font-family: var(--font-sans), system-ui, sans-serif;
+  font-family: var(--font-sans);
 }
 
 main.page {
