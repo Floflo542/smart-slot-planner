@@ -481,9 +481,12 @@ export default function Home() {
     setStatus("Déconnecté d'Outlook.");
   }
 
-  async function geocodeAddress(label: string) {
+  async function geocodeAddress(label: string): Promise<GeoPoint> {
     const cached = geocodeCache.current.get(label);
-    if (cached !== undefined) return cached;
+    if (cached) return cached;
+    if (cached === null) {
+      throw new Error("Adresse introuvable");
+    }
 
     const res = await fetch(`/api/geocode?q=${encodeURIComponent(label)}`);
     const json = await res.json();
