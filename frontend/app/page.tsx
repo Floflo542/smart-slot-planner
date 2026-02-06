@@ -15,6 +15,15 @@ const DEFAULT_DAY_END = "16:30";
 const DEFAULT_BUFFER_MIN = 10;
 const DEFAULT_AVG_SPEED_KMH = 60;
 const DEFAULT_SEARCH_DAYS = 10;
+
+const LOCATION_OVERRIDES: Record<string, string> = {
+  "dépôt speed pro michael mainville":
+    "Grand'Route 202, 4347 Fexhe-le-Haut-Clocher, Belgique",
+};
+
+function normalizeLocationKey(value: string) {
+  return value.trim().toLowerCase();
+}
 const MAX_GEOCODE_LOCATIONS = 25;
 const COMMERCIALS = [
   {
@@ -713,7 +722,9 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
       done += 1;
       setStatus(`Geocodage des RDV existants (${done}/${limited.length})...`);
       try {
-        const point = await geocodeAddress(loc);
+        const override = LOCATION_OVERRIDES[normalizeLocationKey(loc)];
+        const query = override || loc;
+        const point = await geocodeAddress(query);
         locationMap.set(loc, point);
       } catch {
         locationMap.set(loc, null);
@@ -918,6 +929,7 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
 
         if (!chosen) {
           chosen = candidate;
+          chosenDayEvents = dayEvents.length;
           continue;
         }
 
@@ -928,6 +940,7 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
               candidate.cost < chosen.cost)
           ) {
             chosen = candidate;
+            chosenDayEvents = dayEvents.length;
           }
         } else {
           if (
