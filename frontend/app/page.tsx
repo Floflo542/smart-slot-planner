@@ -719,24 +719,29 @@ export default function Home() {
       </header>
 
       <section className="card">
-        <div className="card-title">Calendrier (ICS)</div>
+        <div className="card-title">Commercial</div>
         <div className="grid">
           <div className="field">
-            <label>Commercial selectionne</label>
-            <input type="text" value={form.commercial} readOnly />
-          </div>
-          <div className="field">
-            <label>Lien ICS</label>
-            <input
-              type="text"
-              placeholder="https://.../calendar.ics"
-              value={commercialIcsUrl}
-              readOnly
-            />
+            <label>Selection</label>
+            <select
+              value={form.commercial}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  commercial: e.target.value as Commercial,
+                })
+              }
+            >
+              {COMMERCIALS.map((item) => (
+                <option key={item.name} value={item.name}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
         <p className="small" style={{ marginTop: 10 }}>
-          Utilisez un lien ICS publie depuis Outlook (lecture seule).
+          Le calendrier ICS est relie automatiquement au commercial selectionne.
         </p>
       </section>
 
@@ -748,6 +753,7 @@ export default function Home() {
               Journee: {DEFAULT_DAY_START} - {DEFAULT_DAY_END}
             </span>
             <span className="badge">Buffer: {DEFAULT_BUFFER_MIN} min</span>
+            <span className="badge">Depart: {DEFAULT_HOME_ADDRESS}</span>
           </div>
           <div className="grid">
             <div className="field">
@@ -761,24 +767,6 @@ export default function Home() {
                 <option value="demo">Demo</option>
                 <option value="training">Training</option>
                 <option value="reseller">Reseller</option>
-              </select>
-            </div>
-            <div className="field">
-              <label>Commercial</label>
-              <select
-                value={form.commercial}
-                onChange={(e) =>
-                  setForm({
-                    ...form,
-                    commercial: e.target.value as Commercial,
-                  })
-                }
-              >
-                {COMMERCIALS.map((item) => (
-                  <option key={item.name} value={item.name}>
-                    {item.name}
-                  </option>
-                ))}
               </select>
             </div>
             <div className="field">
@@ -804,15 +792,6 @@ export default function Home() {
                 placeholder={`${DURATION_MIN[form.type]}`}
                 value={form.durationMin}
                 onChange={(e) => setForm({ ...form, durationMin: e.target.value })}
-              />
-            </div>
-            <div className="field">
-              <label>Adresse de depart</label>
-              <input
-                type="text"
-                placeholder="Votre base / maison"
-                value={form.homeAddress}
-                onChange={(e) => setForm({ ...form, homeAddress: e.target.value })}
               />
             </div>
             <div className="field">
