@@ -88,6 +88,9 @@ type BestSlot = {
   travelToNext: number;
   prevLabel?: string;
   nextLabel?: string;
+  prevLocation?: GeoPoint | null;
+  nextLocation?: GeoPoint | null;
+  appointment?: GeoPoint;
   notes: string[];
 };
 
@@ -603,6 +606,9 @@ async function findBestSlot(params: {
         travelToNext,
         prevLabel: prev.label,
         nextLabel,
+        prevLocation: prev.location ?? null,
+        nextLocation: next.location ?? null,
+        appointment: params.appointment,
         notes,
       };
     }
@@ -646,6 +652,21 @@ export default function Home() {
       location: form.appointmentAddress.trim(),
       description,
     };
+  };
+
+  const buildGoogleMapsUrl = (
+    from: GeoPoint,
+    to: GeoPoint,
+    departAt: Date
+  ) => {
+    const params = new URLSearchParams({
+      api: "1",
+      origin: `${from.lat},${from.lon}`,
+      destination: `${to.lat},${to.lon}`,
+      travelmode: "driving",
+      departure_time: Math.floor(departAt.getTime() / 1000).toString(),
+    });
+    return `https://www.google.com/maps/dir/?${params.toString()}`;
   };
 
   const travelMinutesWithTraffic = async (
@@ -1196,6 +1217,10 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
           <div className="card-title">Créneaux proposés</div>
           {options.map((option, idx) => {
             const slot = option.slot;
+            const departFromPrev = new Date(
+              slot.start.getTime() - slot.travelFromPrev * 60000
+            );
+            const departToNext = new Date(slot.end.getTime());
             return (
               <div key={`${slot.start.toISOString()}-${idx}`} style={{ marginTop: 16 }}>
                 <div className="small">Option {idx + 1}</div>
@@ -1231,6 +1256,34 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
                   >
                     Telecharger le fichier .ics
                   </button>
+                  {slot.prevLocation && slot.appointment ? (
+                    <a
+                      className="btn ghost"
+                      href={buildGoogleMapsUrl(
+                        slot.prevLocation,
+                        slot.appointment,
+                        departFromPrev
+                      )}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Ouvrir itineraire (aller)
+                    </a>
+                  ) : null}
+                  {slot.appointment && slot.nextLocation ? (
+                    <a
+                      className="btn ghost"
+                      href={buildGoogleMapsUrl(
+                        slot.appointment,
+                        slot.nextLocation,
+                        departToNext
+                      )}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Ouvrir itineraire (retour)
+                    </a>
+                  ) : null}
                 </div>
                 {slot.notes.length ? (
                   <ul className="note-list">
