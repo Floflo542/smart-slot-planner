@@ -823,6 +823,9 @@ export default function Home() {
 
   return (
     <main className="page">
+      <div className="topbar">
+        <img className="logo" src="/unox-logo.png" alt="Unox" />
+      </div>
       <header className="hero">
         <div className="eyebrow">Planification + Outlook</div>
         <h1>Smart Slot Planner</h1>
