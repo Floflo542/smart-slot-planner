@@ -9,6 +9,7 @@ const DURATION_MIN = {
 } as const;
 
 const DEFAULT_HOME_ADDRESS = "Rue du Tram, 7850 Enghien, Belgique";
+const DEFAULT_HOME_COORDS = { lat: 50.695, lon: 4.04 };
 const DEFAULT_DAY_START = "07:30";
 const DEFAULT_DAY_END = "16:30";
 const DEFAULT_BUFFER_MIN = 10;
@@ -613,12 +614,18 @@ export default function Home() {
     try {
       let home: GeoPoint;
       let appointment: GeoPoint;
+      let homeNote: string | null = null;
 
       try {
-        home = await geocodeAddress(form.homeAddress.trim());
+        home = await geocodeAddress(DEFAULT_HOME_ADDRESS);
       } catch {
-        setStatus(`Adresse introuvable: ${form.homeAddress.trim()}`);
-        return;
+        home = {
+          label: DEFAULT_HOME_ADDRESS,
+          lat: DEFAULT_HOME_COORDS.lat,
+          lon: DEFAULT_HOME_COORDS.lon,
+        };
+        homeNote =
+          "Adresse de depart introuvable: utilisation du centre d'Enghien.";
       }
 
       try {
@@ -713,6 +720,9 @@ export default function Home() {
       }
 
       const notes: string[] = [...chosen.slot.notes];
+      if (homeNote) {
+        notes.push(homeNote);
+      }
       if (chosen.missingLocations > 0) {
         notes.push(
           `${chosen.missingLocations} RDV calendrier sans geocodage: trajets estimes a 0 min.`
