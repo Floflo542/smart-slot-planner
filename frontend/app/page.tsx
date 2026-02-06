@@ -48,6 +48,12 @@ type BestSlot = {
   notes: string[];
 };
 
+type IcsPayload = {
+  summary: string;
+  location: string;
+  description: string;
+};
+
 type FormState = {
   homeAddress: string;
   appointmentAddress: string;
@@ -114,6 +120,69 @@ function toLocalIso(date: Date) {
 function formatHHMM(date: Date) {
   const pad = (value: number) => String(value).padStart(2, "0");
   return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function formatIcsDate(date: Date) {
+  return date
+    .toISOString()
+    .replace(/[-:]/g, "")
+    .replace(/\.\d{3}Z$/, "Z");
+}
+
+function escapeIcsText(value: string) {
+  return value
+    .replace(/\\/g, "\\\\")
+    .replace(/;/g, "\\;")
+    .replace(/,/g, "\\,")
+    .replace(/\r?\n/g, "\\n");
+}
+
+function buildIcsEvent(params: {
+  start: Date;
+  end: Date;
+  summary: string;
+  location: string;
+  description: string;
+}) {
+  const uid = `${Date.now()}-${Math.random().toString(36).slice(2)}@smart-slot-planner`;
+  return [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//Smart Slot Planner//EN",
+    "CALSCALE:GREGORIAN",
+    "METHOD:PUBLISH",
+    "BEGIN:VEVENT",
+    `UID:${uid}`,
+    `DTSTAMP:${formatIcsDate(new Date())}`,
+    `DTSTART:${formatIcsDate(params.start)}`,
+    `DTEND:${formatIcsDate(params.end)}`,
+    `SUMMARY:${escapeIcsText(params.summary)}`,
+    `LOCATION:${escapeIcsText(params.location)}`,
+    `DESCRIPTION:${escapeIcsText(params.description)}`,
+    "END:VEVENT",
+    "END:VCALENDAR",
+  ].join("\r\n");
+}
+
+function downloadIcsFile(slot: BestSlot, payload: IcsPayload) {
+  const ics = buildIcsEvent({
+    start: slot.start,
+    end: slot.end,
+    summary: payload.summary,
+    location: payload.location,
+    description: payload.description,
+  });
+
+  const blob = new Blob([ics], { type: "text/calendar;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  const dateStamp = localDateString(slot.start);
+  a.href = url;
+  a.download = `rdv-${dateStamp}.ics`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 function formatDateLabel(date: Date) {
@@ -316,6 +385,7 @@ export default function Home() {
   const [outlookConnected, setOutlookConnected] = useState(false);
   const [outlookUser, setOutlookUser] = useState<string | null>(null);
   const [result, setResult] = useState<BestSlot | null>(null);
+  const [icsPayload, setIcsPayload] = useState<IcsPayload | null>(null);
   const [createdEventId, setCreatedEventId] = useState<string | null>(null);
 
   const [form, setForm] = useState<FormState>({
@@ -670,6 +740,7 @@ export default function Home() {
     e.preventDefault();
     setStatus("Analyse du meilleur créneau...");
     setResult(null);
+    setIcsPayload(null);
     setCreatedEventId(null);
 
     if (!outlookConnected) {
@@ -808,6 +879,12 @@ export default function Home() {
       const subject =
         form.appointmentTitle.trim() ||
         `${form.type.toUpperCase()} — ${form.appointmentAddress.trim()}`;
+      const description = `Type: ${form.type}\nAdresse: ${form.appointmentAddress.trim()}\nTrajet estimé: ${enrichedBest.travelFromPrev} min (aller) / ${enrichedBest.travelToNext} min (retour).`;
+      setIcsPayload({
+        summary: subject,
+        location: form.appointmentAddress.trim(),
+        description,
+      });
 
       if (form.autoCreate) {
         const created = await createOutlookEvent(token, {
@@ -815,7 +892,7 @@ export default function Home() {
           start: enrichedBest.start,
           end: enrichedBest.end,
           location: form.appointmentAddress.trim(),
-          body: `Type: ${form.type}\nAdresse: ${form.appointmentAddress.trim()}\nTrajet estimé: ${enrichedBest.travelFromPrev} min (aller) / ${enrichedBest.travelToNext} min (retour).`,
+          body: description,
         });
 
         setCreatedEventId(created?.id || null);
@@ -1019,7 +1096,7 @@ export default function Home() {
                   setForm({ ...form, autoCreate: e.target.checked })
                 }
               />
-              Ajouter automatiquement dans Outlook
+              Ajouter automatiquement via Outlook (connexion requise)
             </label>
           </div>
 
@@ -1027,6 +1104,15 @@ export default function Home() {
             <button className="btn primary" type="submit">
               Trouver le meilleur créneau
             </button>
+            {result && icsPayload ? (
+              <button
+                className="btn ghost"
+                type="button"
+                onClick={() => downloadIcsFile(result, icsPayload)}
+              >
+                Telecharger le fichier .ics
+              </button>
+            ) : null}
           </div>
         </form>
       </section>
