@@ -322,6 +322,11 @@ function isOnlineLocation(label: string) {
   ].some((token) => lower.includes(token));
 }
 
+function roundToMinutes(date: Date, step: number) {
+  const ms = step * 60 * 1000;
+  return new Date(Math.round(date.getTime() / ms) * ms);
+}
+
 function mergeBusyEvents(events: FixedEvent[]) {
   const sorted = [...events].sort((a, b) => a.start.getTime() - b.start.getTime());
   const merged: FixedEvent[] = [];
@@ -348,7 +353,7 @@ function mergeBusyEvents(events: FixedEvent[]) {
   return merged;
 }
 
-function findBestSlot(params: {
+async function findBestSlot(params: {
   dayStart: Date;
   dayEnd: Date;
   home: GeoPoint;
@@ -357,6 +362,11 @@ function findBestSlot(params: {
   bufferMin: number;
   avgSpeedKmh: number;
   fixed: FixedEvent[];
+  travelMinutesFn: (
+    a: GeoPoint | null,
+    b: GeoPoint | null,
+    departAt: Date
+  ) => Promise<number>;
 }) {
   const timeline = [
     {
@@ -387,21 +397,26 @@ function findBestSlot(params: {
     const prevBuffer = prev.id === "day-start" ? 0 : params.bufferMin;
     const nextBuffer = params.bufferMin;
 
-    const travelFromPrev = travelMinutes(prev.location ?? null, params.appointment, params.avgSpeedKmh);
-    const travelToNext = travelMinutes(params.appointment, next.location ?? null, params.avgSpeedKmh);
-
-    const earliest = addMinutes(prev.end, prevBuffer + travelFromPrev);
-    const latest = addMinutes(
-      next.start,
-      -1 * (nextBuffer + travelToNext + params.durationMin)
+    const departFromPrev = addMinutes(prev.end, prevBuffer);
+    const travelFromPrev = await params.travelMinutesFn(
+      prev.location ?? null,
+      params.appointment,
+      departFromPrev
     );
 
-    if (earliest.getTime() > latest.getTime()) {
+    const candidateStart = addMinutes(departFromPrev, travelFromPrev);
+    const candidateEnd = addMinutes(candidateStart, params.durationMin);
+
+    const travelToNext = await params.travelMinutesFn(
+      params.appointment,
+      next.location ?? null,
+      candidateEnd
+    );
+    const arrivesNext = addMinutes(candidateEnd, travelToNext + nextBuffer);
+
+    if (arrivesNext.getTime() > next.start.getTime()) {
       continue;
     }
-
-    const candidateStart = earliest;
-    const candidateEnd = addMinutes(candidateStart, params.durationMin);
     const cost = travelFromPrev + travelToNext;
 
     if (cost < bestCost || (cost === bestCost && (!best || candidateStart < best.start))) {
@@ -440,6 +455,7 @@ export default function Home() {
   });
 
   const geocodeCache = useRef(new Map<string, GeoPoint | null>());
+  const routeCache = useRef(new Map<string, number>());
 
   const timezone = useMemo(
     () => Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -447,6 +463,40 @@ export default function Home() {
   );
   const commercialIcsUrl =
     COMMERCIALS.find((item) => item.name === form.commercial)?.icsUrl || "";
+
+  const travelMinutesWithTraffic = async (
+    a: GeoPoint | null,
+    b: GeoPoint | null,
+    departAt: Date
+  ) => {
+    if (!a || !b) return 0;
+    const bucket = roundToMinutes(departAt, 5).toISOString();
+    const key = `${a.lat},${a.lon}|${b.lat},${b.lon}|${bucket}`;
+    const cached = routeCache.current.get(key);
+    if (cached !== undefined) return cached;
+
+    try {
+      const res = await fetch(
+        `/api/route?from=${encodeURIComponent(
+          `${a.lat},${a.lon}`
+        )}&to=${encodeURIComponent(`${b.lat},${b.lon}`)}&depart_at=${encodeURIComponent(
+          departAt.toISOString()
+        )}`
+      );
+      const json = await res.json();
+      if (res.ok && json?.ok && Number.isFinite(json.duration_min)) {
+        const minutes = Math.max(1, Math.round(json.duration_min));
+        routeCache.current.set(key, minutes);
+        return minutes;
+      }
+    } catch {
+      // ignore and fallback below
+    }
+
+    const fallback = travelMinutes(a, b, Number(form.avgSpeedKmh) || 60);
+    routeCache.current.set(key, fallback);
+    return fallback;
+  };
 
 async function geocodeAddress(label: string): Promise<GeoPoint> {
     const trimmed = label.trim();
@@ -708,7 +758,7 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
           locationMap
         );
 
-        const best = findBestSlot({
+        const best = await findBestSlot({
           dayStart,
           dayEnd,
           home,
@@ -717,6 +767,7 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
           bufferMin,
           avgSpeedKmh,
           fixed,
+          travelMinutesFn: travelMinutesWithTraffic,
         });
 
         if (!best) {
