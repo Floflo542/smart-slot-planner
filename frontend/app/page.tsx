@@ -8,6 +8,12 @@ const DURATION_MIN = {
   reseller: 60,
 } as const;
 
+const DEFAULT_HOME_ADDRESS = "Rue du Tram 7850 Enghien";
+const DEFAULT_DAY_START = "07:30";
+const DEFAULT_DAY_END = "16:30";
+const DEFAULT_BUFFER_MIN = 10;
+const DEFAULT_SEARCH_DAYS = 10;
+
 type VisitType = keyof typeof DURATION_MIN;
 
 type GeoPoint = {
@@ -43,16 +49,14 @@ type BestSlot = {
 };
 
 type FormState = {
-  date: string;
   homeAddress: string;
   appointmentAddress: string;
   appointmentTitle: string;
   type: VisitType;
   durationMin: string;
-  startTime: string;
-  endTime: string;
-  bufferMin: string;
   avgSpeedKmh: string;
+  searchDays: string;
+  includeWeekends: boolean;
   autoCreate: boolean;
 };
 
@@ -111,12 +115,45 @@ function formatHHMM(date: Date) {
   return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+function formatDateLabel(date: Date) {
+  return date.toLocaleDateString("fr-FR", {
+    weekday: "long",
+    day: "2-digit",
+    month: "long",
+  });
+}
+
 function addMinutes(date: Date, minutes: number) {
   return new Date(date.getTime() + minutes * 60000);
 }
 
 function clampDate(date: Date, min: Date, max: Date) {
   return new Date(Math.max(min.getTime(), Math.min(max.getTime(), date.getTime())));
+}
+
+function isSameDay(a: Date, b: Date) {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  );
+}
+
+function buildDateCandidates(days: number, includeWeekends: boolean) {
+  const result: Date[] = [];
+  const cursor = new Date();
+  cursor.setHours(0, 0, 0, 0);
+
+  while (result.length < days) {
+    const day = cursor.getDay();
+    const isWeekend = day === 0 || day === 6;
+    if (includeWeekends || !isWeekend) {
+      result.push(new Date(cursor));
+    }
+    cursor.setDate(cursor.getDate() + 1);
+  }
+
+  return result;
 }
 
 function haversineKm(a: GeoPoint, b: GeoPoint) {
@@ -281,22 +318,21 @@ export default function Home() {
   const [createdEventId, setCreatedEventId] = useState<string | null>(null);
 
   const [form, setForm] = useState<FormState>({
-    date: localDateString(),
-    homeAddress: "",
+    homeAddress: DEFAULT_HOME_ADDRESS,
     appointmentAddress: "",
     appointmentTitle: "",
     type: "demo",
     durationMin: "",
-    startTime: "07:30",
-    endTime: "16:30",
-    bufferMin: "10",
     avgSpeedKmh: "60",
+    searchDays: String(DEFAULT_SEARCH_DAYS),
+    includeWeekends: false,
     autoCreate: true,
   });
 
   const geocodeCache = useRef(new Map<string, GeoPoint | null>());
 
-  const hasOutlookConfig = OUTLOOK_CLIENT_ID && OUTLOOK_REDIRECT_URI;
+  const hasOutlookConfig = Boolean(OUTLOOK_CLIENT_ID && OUTLOOK_REDIRECT_URI);
+  const connectDisabled = !hasOutlookConfig;
   const authority = `https://login.microsoftonline.com/${OUTLOOK_TENANT}/oauth2/v2.0`;
 
   const timezone = useMemo(
@@ -449,7 +485,7 @@ export default function Home() {
 
   async function startOutlookLogin() {
     if (!hasOutlookConfig) {
-      setStatus("Ajoutez les variables Outlook côté frontend.");
+      setStatus("Configurez les variables Outlook sur Vercel.");
       return;
     }
 
@@ -649,24 +685,6 @@ export default function Home() {
       return;
     }
 
-    if (!form.date) {
-      setStatus("Date manquante.");
-      return;
-    }
-
-    if (!form.startTime || !form.endTime) {
-      setStatus("Horaires de journée manquants.");
-      return;
-    }
-
-    const dayStart = parseDateTime(form.date, form.startTime);
-    const dayEnd = parseDateTime(form.date, form.endTime);
-
-    if (dayEnd.getTime() <= dayStart.getTime()) {
-      setStatus("L'heure de fin doit être après l'heure de début.");
-      return;
-    }
-
     const durationMin = form.durationMin
       ? Number.parseInt(form.durationMin, 10)
       : DURATION_MIN[form.type];
@@ -676,8 +694,15 @@ export default function Home() {
       return;
     }
 
-    const bufferMin = Number.parseInt(form.bufferMin, 10) || 0;
+    const bufferMin = DEFAULT_BUFFER_MIN;
     const avgSpeedKmh = Number.parseFloat(form.avgSpeedKmh) || 60;
+    const searchDaysRaw = Number.parseInt(form.searchDays, 10);
+    const searchDays =
+      Number.isFinite(searchDaysRaw) && searchDaysRaw > 0
+        ? searchDaysRaw
+        : DEFAULT_SEARCH_DAYS;
+    const windowLabel = form.includeWeekends ? "jours" : "jours ouvres";
+    setStatus(`Analyse des ${searchDays} prochains ${windowLabel}...`);
 
     try {
       const token = await getAccessToken();
@@ -690,36 +715,75 @@ export default function Home() {
       const home = await geocodeAddress(form.homeAddress.trim());
       const appointment = await geocodeAddress(form.appointmentAddress.trim());
 
-      const events = await fetchCalendarEvents(token, dayStart, dayEnd);
-      const fixed = await buildFixedEvents(events, dayStart, dayEnd);
+      const now = new Date();
+      const candidates = buildDateCandidates(searchDays, form.includeWeekends);
 
-      const best = findBestSlot({
-        dayStart,
-        dayEnd,
-        home,
-        appointment,
-        durationMin,
-        bufferMin,
-        avgSpeedKmh,
-        fixed,
-      });
+      let chosen:
+        | { slot: BestSlot; missingLocations: number }
+        | null = null;
+      let bestCost = Number.POSITIVE_INFINITY;
 
-      if (!best) {
-        setStatus("Aucun créneau disponible dans cette journée.");
+      for (const day of candidates) {
+        const dateStr = localDateString(day);
+        let dayStart = parseDateTime(dateStr, DEFAULT_DAY_START);
+        const dayEnd = parseDateTime(dateStr, DEFAULT_DAY_END);
+
+        if (isSameDay(day, now) && now.getTime() > dayStart.getTime()) {
+          dayStart = new Date(Math.min(now.getTime(), dayEnd.getTime()));
+        }
+
+        if (dayEnd.getTime() <= dayStart.getTime()) {
+          continue;
+        }
+
+        const events = await fetchCalendarEvents(token, dayStart, dayEnd);
+        const fixed = await buildFixedEvents(events, dayStart, dayEnd);
+
+        const best = findBestSlot({
+          dayStart,
+          dayEnd,
+          home,
+          appointment,
+          durationMin,
+          bufferMin,
+          avgSpeedKmh,
+          fixed,
+        });
+
+        if (!best) {
+          continue;
+        }
+
+        const missingLocations = fixed.filter(
+          (evt) => evt.locationLabel && !evt.location
+        ).length;
+        const travelCost = best.travelFromPrev + best.travelToNext;
+
+        if (
+          !chosen ||
+          travelCost < bestCost ||
+          (travelCost === bestCost && best.start < chosen.slot.start)
+        ) {
+          bestCost = travelCost;
+          chosen = { slot: best, missingLocations };
+        }
+      }
+
+      if (!chosen) {
+        setStatus(
+          `Aucun creneau disponible sur les ${searchDays} prochains ${windowLabel}.`
+        );
         return;
       }
 
-      const missingLocations = fixed.filter(
-        (evt) => evt.locationLabel && !evt.location
-      ).length;
-      const notes: string[] = [];
-      if (missingLocations > 0) {
+      const notes: string[] = [...chosen.slot.notes];
+      if (chosen.missingLocations > 0) {
         notes.push(
-          `${missingLocations} RDV Outlook sans geocodage: trajets estimes a 0 min.`
+          `${chosen.missingLocations} RDV Outlook sans geocodage: trajets estimes a 0 min.`
         );
       }
 
-      const enrichedBest: BestSlot = { ...best, notes };
+      const enrichedBest: BestSlot = { ...chosen.slot, notes };
       setResult(enrichedBest);
 
       const subject =
@@ -737,13 +801,17 @@ export default function Home() {
 
         setCreatedEventId(created?.id || null);
         setStatus(
-          `RDV cree dans Outlook: ${formatHHMM(enrichedBest.start)} -> ${formatHHMM(
+          `RDV cree dans Outlook le ${formatDateLabel(
+            enrichedBest.start
+          )} : ${formatHHMM(enrichedBest.start)} - ${formatHHMM(
             enrichedBest.end
           )}`
         );
       } else {
         setStatus(
-          `Creneau recommande: ${formatHHMM(enrichedBest.start)} -> ${formatHHMM(
+          `Creneau recommande le ${formatDateLabel(
+            enrichedBest.start
+          )} : ${formatHHMM(enrichedBest.start)} - ${formatHHMM(
             enrichedBest.end
           )}`
         );
@@ -774,12 +842,23 @@ export default function Home() {
           </span>
           {!hasOutlookConfig ? (
             <span className="small">
-              Variables requises manquantes côté frontend.
+              Renseignez NEXT_PUBLIC_OUTLOOK_CLIENT_ID et
+              NEXT_PUBLIC_OUTLOOK_REDIRECT_URI sur Vercel.
             </span>
           ) : null}
         </div>
         <div className="row">
-          <button className="btn primary" type="button" onClick={startOutlookLogin}>
+          <button
+            className="btn primary"
+            type="button"
+            onClick={startOutlookLogin}
+            disabled={connectDisabled}
+            title={
+              connectDisabled
+                ? "Configurez NEXT_PUBLIC_OUTLOOK_CLIENT_ID et NEXT_PUBLIC_OUTLOOK_REDIRECT_URI"
+                : ""
+            }
+          >
             Connecter Outlook
           </button>
           <button className="btn ghost" type="button" onClick={disconnectOutlook}>
@@ -794,15 +873,13 @@ export default function Home() {
       <section className="card">
         <div className="card-title">Nouveau RDV</div>
         <form onSubmit={handleSubmit}>
+          <div className="row" style={{ marginBottom: 12 }}>
+            <span className="badge">
+              Journee: {DEFAULT_DAY_START} - {DEFAULT_DAY_END}
+            </span>
+            <span className="badge">Buffer: {DEFAULT_BUFFER_MIN} min</span>
+          </div>
           <div className="grid">
-            <div className="field">
-              <label>Date</label>
-              <input
-                type="date"
-                value={form.date}
-                onChange={(e) => setForm({ ...form, date: e.target.value })}
-              />
-            </div>
             <div className="field">
               <label>Type</label>
               <select
@@ -817,7 +894,17 @@ export default function Home() {
               </select>
             </div>
             <div className="field">
-              <label>Adresse de départ</label>
+              <label>Duree (min)</label>
+              <input
+                type="number"
+                min={15}
+                placeholder={`${DURATION_MIN[form.type]}`}
+                value={form.durationMin}
+                onChange={(e) => setForm({ ...form, durationMin: e.target.value })}
+              />
+            </div>
+            <div className="field">
+              <label>Adresse de depart</label>
               <input
                 type="text"
                 placeholder="Votre base / maison"
@@ -848,41 +935,6 @@ export default function Home() {
               />
             </div>
             <div className="field">
-              <label>Durée (min)</label>
-              <input
-                type="number"
-                min={15}
-                placeholder={`${DURATION_MIN[form.type]}`}
-                value={form.durationMin}
-                onChange={(e) => setForm({ ...form, durationMin: e.target.value })}
-              />
-            </div>
-            <div className="field">
-              <label>Début journée</label>
-              <input
-                type="time"
-                value={form.startTime}
-                onChange={(e) => setForm({ ...form, startTime: e.target.value })}
-              />
-            </div>
-            <div className="field">
-              <label>Fin journée</label>
-              <input
-                type="time"
-                value={form.endTime}
-                onChange={(e) => setForm({ ...form, endTime: e.target.value })}
-              />
-            </div>
-            <div className="field">
-              <label>Buffer (min)</label>
-              <input
-                type="number"
-                min={0}
-                value={form.bufferMin}
-                onChange={(e) => setForm({ ...form, bufferMin: e.target.value })}
-              />
-            </div>
-            <div className="field">
               <label>Vitesse moyenne (km/h)</label>
               <input
                 type="number"
@@ -891,6 +943,31 @@ export default function Home() {
                 onChange={(e) => setForm({ ...form, avgSpeedKmh: e.target.value })}
               />
             </div>
+            <div className="field">
+              <label>Jours a analyser</label>
+              <input
+                type="number"
+                min={1}
+                value={form.searchDays}
+                onChange={(e) => setForm({ ...form, searchDays: e.target.value })}
+              />
+            </div>
+          </div>
+
+          <div className="row" style={{ marginTop: 12 }}>
+            <label
+              className="inline"
+              style={{ display: "flex", alignItems: "center", gap: 8 }}
+            >
+              <input
+                type="checkbox"
+                checked={form.includeWeekends}
+                onChange={(e) =>
+                  setForm({ ...form, includeWeekends: e.target.checked })
+                }
+              />
+              Inclure le week-end
+            </label>
           </div>
 
           <div className="row" style={{ marginTop: 14 }}>
@@ -927,8 +1004,14 @@ export default function Home() {
           <div className="card-title">Créneau recommandé</div>
           <div className="result-grid">
             <div className="result-card">
-              <div className="small">Heure proposée</div>
-              <div style={{ fontSize: 24, fontWeight: 700 }}>
+              <div className="small">Date recommandee</div>
+              <div style={{ fontSize: 20, fontWeight: 700 }}>
+                {formatDateLabel(result.start)}
+              </div>
+              <div className="small" style={{ marginTop: 6 }}>
+                Heure proposee
+              </div>
+              <div style={{ fontSize: 22, fontWeight: 700 }}>
                 {formatHHMM(result.start)} - {formatHHMM(result.end)}
               </div>
               <div className="small">Fuseau: {timezone}</div>

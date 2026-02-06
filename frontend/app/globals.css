@@ -159,6 +159,13 @@ label.inline {
   transform: translateY(1px);
 }
 
+.btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
 .btn.primary {
   background: var(--accent);
   color: #f8fafc;
