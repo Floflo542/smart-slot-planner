@@ -14,6 +14,7 @@ const DEFAULT_DAY_START = "07:30";
 const DEFAULT_DAY_END = "16:30";
 const DEFAULT_BUFFER_MIN = 10;
 const DEFAULT_SEARCH_DAYS = 10;
+const MAX_GEOCODE_LOCATIONS = 25;
 const COMMERCIALS = [
   {
     name: "Florian Monoyer",
@@ -447,7 +448,7 @@ export default function Home() {
   const commercialIcsUrl =
     COMMERCIALS.find((item) => item.name === form.commercial)?.icsUrl || "";
 
-  async function geocodeAddress(label: string): Promise<GeoPoint> {
+async function geocodeAddress(label: string): Promise<GeoPoint> {
     const trimmed = label.trim();
     const cached = geocodeCache.current.get(trimmed);
     if (cached) return cached;
@@ -490,7 +491,16 @@ export default function Home() {
         continue;
       }
 
-      const res = await fetch(`/api/geocode?q=${encodeURIComponent(query)}`);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 6000);
+      const res = await fetch(`/api/geocode?q=${encodeURIComponent(query)}`, {
+        signal: controller.signal,
+      }).catch(() => null);
+      clearTimeout(timeout);
+      if (!res) {
+        geocodeCache.current.set(query, null);
+        continue;
+      }
       const json = await res.json();
       if (!res.ok || !json?.ok) {
         geocodeCache.current.set(query, null);
@@ -512,6 +522,34 @@ export default function Home() {
     throw new Error("Adresse introuvable");
   }
 
+  async function preloadIcsLocations(events: IcsEvent[]) {
+    const unique = Array.from(
+      new Set(
+        events
+          .map((evt) => evt.location.trim())
+          .filter((loc) => loc && !isOnlineLocation(loc))
+      )
+    );
+
+    const limited = unique.slice(0, MAX_GEOCODE_LOCATIONS);
+    const skipped = Math.max(0, unique.length - limited.length);
+    const locationMap = new Map<string, GeoPoint | null>();
+
+    let done = 0;
+    for (const loc of limited) {
+      done += 1;
+      setStatus(`Geocodage des RDV existants (${done}/${limited.length})...`);
+      try {
+        const point = await geocodeAddress(loc);
+        locationMap.set(loc, point);
+      } catch {
+        locationMap.set(loc, null);
+      }
+    }
+
+    return { locationMap, skipped };
+  }
+
   function filterIcsEventsForDay(
     events: IcsEvent[],
     dayStart: Date,
@@ -528,7 +566,8 @@ export default function Home() {
   async function buildFixedEventsFromIcs(
     events: IcsEvent[],
     dayStart: Date,
-    dayEnd: Date
+    dayEnd: Date,
+    locationMap: Map<string, GeoPoint | null>
   ) {
     const fixed: FixedEvent[] = [];
     const dayEvents = filterIcsEventsForDay(events, dayStart, dayEnd);
@@ -549,11 +588,7 @@ export default function Home() {
       let location: GeoPoint | null = null;
       const locationLabel = evt.location || "";
       if (locationLabel && !isOnlineLocation(locationLabel)) {
-        try {
-          location = await geocodeAddress(locationLabel);
-        } catch {
-          location = null;
-        }
+        location = locationMap.get(locationLabel) ?? null;
       }
 
       fixed.push({
@@ -644,6 +679,7 @@ export default function Home() {
       }
       const text = await res.text();
       const icsEvents = parseIcsEvents(text);
+      const { locationMap, skipped } = await preloadIcsLocations(icsEvents);
 
       const now = new Date();
       const candidates = buildDateCandidates(searchDays, form.includeWeekends);
@@ -665,7 +701,12 @@ export default function Home() {
           continue;
         }
 
-        const fixed = await buildFixedEventsFromIcs(icsEvents, dayStart, dayEnd);
+        const fixed = await buildFixedEventsFromIcs(
+          icsEvents,
+          dayStart,
+          dayEnd,
+          locationMap
+        );
 
         const best = findBestSlot({
           dayStart,
@@ -727,6 +768,11 @@ export default function Home() {
       if (chosen.missingLocations > 0) {
         notes.push(
           `${chosen.missingLocations} RDV calendrier sans geocodage: trajets estimes a 0 min.`
+        );
+      }
+      if (skipped > 0) {
+        notes.push(
+          `${skipped} adresses ignorees pour accelerer l'optimisation.`
         );
       }
 
