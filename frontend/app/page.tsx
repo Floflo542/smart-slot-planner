@@ -592,13 +592,17 @@ async function findBestSlot(params: {
 
     if (cost < bestCost || (cost === bestCost && (!best || candidateStart < best.start))) {
       bestCost = cost;
+      const nextLabel =
+        next.id === "day-end"
+          ? next.label
+          : `${next.label} (${formatHHMM(next.start)})`;
       best = {
         start: candidateStart,
         end: candidateEnd,
         travelFromPrev,
         travelToNext,
         prevLabel: prev.label,
-        nextLabel: next.label,
+        nextLabel,
         notes,
       };
     }
