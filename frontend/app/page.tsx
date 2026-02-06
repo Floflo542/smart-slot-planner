@@ -128,6 +128,28 @@ function parseIcsDate(value: string, isDateOnly: boolean) {
   return new Date(year, month, day, hour, min, sec);
 }
 
+function parseFreeBusyRanges(value: string): IcsEvent[] {
+  const out: IcsEvent[] = [];
+  const ranges = value.split(",");
+  for (const range of ranges) {
+    const [startRaw, endRaw] = range.split("/");
+    if (!startRaw || !endRaw) continue;
+    const isDateOnly = startRaw.length === 8 && endRaw.length === 8;
+    const start = parseIcsDate(startRaw, isDateOnly);
+    const end = parseIcsDate(endRaw, isDateOnly);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) continue;
+    if (end.getTime() <= start.getTime()) continue;
+    out.push({
+      summary: "Busy",
+      location: "",
+      start,
+      end,
+      isAllDay: isDateOnly,
+    });
+  }
+  return out;
+}
+
 function parseIcsEvents(text: string): IcsEvent[] {
   const rawLines = text.replace(/\\r/g, "").split("\\n");
   const lines: string[] = [];
@@ -145,11 +167,18 @@ function parseIcsEvents(text: string): IcsEvent[] {
   const events: IcsEvent[] = [];
   let current: Partial<IcsEvent> | null = null;
   let currentAllDay = false;
+  let inFreeBusy = false;
 
   for (const line of lines) {
     if (line === "BEGIN:VEVENT") {
       current = {};
       currentAllDay = false;
+      inFreeBusy = false;
+      continue;
+    }
+    if (line === "BEGIN:VFREEBUSY") {
+      current = null;
+      inFreeBusy = true;
       continue;
     }
     if (line === "END:VEVENT") {
@@ -165,11 +194,21 @@ function parseIcsEvents(text: string): IcsEvent[] {
       current = null;
       continue;
     }
-    if (!current) continue;
+    if (line === "END:VFREEBUSY") {
+      inFreeBusy = false;
+      continue;
+    }
 
     const [left, value = ""] = line.split(":");
     const [prop, ...paramParts] = left.split(";");
     const params = paramParts.join(";").toUpperCase();
+
+    if (inFreeBusy && prop === "FREEBUSY") {
+      events.push(...parseFreeBusyRanges(value));
+      continue;
+    }
+
+    if (!current) continue;
 
     if (prop === "SUMMARY") {
       current.summary = value;
@@ -736,7 +775,9 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
         text = await res.text();
       }
 
-      if (!text.includes("BEGIN:VEVENT")) {
+      const hasEvents = text.includes("BEGIN:VEVENT");
+      const hasFreeBusy = text.includes("BEGIN:VFREEBUSY");
+      if (!hasEvents && !hasFreeBusy) {
         throw new Error("Calendrier ICS invalide ou vide.");
       }
       const icsEvents = parseIcsEvents(text);
