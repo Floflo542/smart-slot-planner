@@ -13,12 +13,16 @@ const DEFAULT_DAY_START = "07:30";
 const DEFAULT_DAY_END = "16:30";
 const DEFAULT_BUFFER_MIN = 10;
 const DEFAULT_SEARCH_DAYS = 10;
-const DEFAULT_ICS_URL =
-  "https://outlook.office365.com/owa/calendar/df8485983c5d4b38b8bbf8800a546eec@unox.com/9d9e207ca6414d4ca8be7c0f3070313715591987231137818096/calendar.ics";
-const COMMERCIALS = ["Florian Monoyer"] as const;
+const COMMERCIALS = [
+  {
+    name: "Florian Monoyer",
+    icsUrl:
+      "https://outlook.office365.com/owa/calendar/df8485983c5d4b38b8bbf8800a546eec@unox.com/9d9e207ca6414d4ca8be7c0f3070313715591987231137818096/calendar.ics",
+  },
+] as const;
 
 type VisitType = keyof typeof DURATION_MIN;
-type Commercial = (typeof COMMERCIALS)[number];
+type Commercial = (typeof COMMERCIALS)[number]["name"];
 
 type GeoPoint = {
   label: string;
@@ -70,7 +74,6 @@ type FormState = {
   searchDays: string;
   includeWeekends: boolean;
   optimizeMode: "travel" | "earliest";
-  icsUrl: string;
 };
 
 function localDateString(date = new Date()) {
@@ -432,7 +435,6 @@ export default function Home() {
     searchDays: String(DEFAULT_SEARCH_DAYS),
     includeWeekends: false,
     optimizeMode: "travel",
-    icsUrl: DEFAULT_ICS_URL,
   });
 
   const geocodeCache = useRef(new Map<string, GeoPoint | null>());
@@ -441,6 +443,8 @@ export default function Home() {
     () => Intl.DateTimeFormat().resolvedOptions().timeZone,
     []
   );
+  const commercialIcsUrl =
+    COMMERCIALS.find((item) => item.name === form.commercial)?.icsUrl || "";
 
   async function geocodeAddress(label: string): Promise<GeoPoint> {
     const cached = geocodeCache.current.get(label);
@@ -561,17 +565,31 @@ export default function Home() {
       form.optimizeMode === "travel" ? "trajets optimises" : "plus tot possible";
     setStatus(`Analyse des ${searchDays} prochains ${windowLabel} (${modeLabel})...`);
 
-    if (!form.icsUrl.trim()) {
-      setStatus("Ajoutez un lien ICS valide.");
+    if (!commercialIcsUrl.trim()) {
+      setStatus("Lien ICS introuvable pour ce commercial.");
       return;
     }
 
     try {
-      const home = await geocodeAddress(form.homeAddress.trim());
-      const appointment = await geocodeAddress(form.appointmentAddress.trim());
+      let home: GeoPoint;
+      let appointment: GeoPoint;
+
+      try {
+        home = await geocodeAddress(form.homeAddress.trim());
+      } catch {
+        setStatus(`Adresse introuvable: ${form.homeAddress.trim()}`);
+        return;
+      }
+
+      try {
+        appointment = await geocodeAddress(form.appointmentAddress.trim());
+      } catch {
+        setStatus(`Adresse introuvable: ${form.appointmentAddress.trim()}`);
+        return;
+      }
 
       const res = await fetch(
-        `/api/ics?url=${encodeURIComponent(form.icsUrl.trim())}`
+        `/api/ics?url=${encodeURIComponent(commercialIcsUrl)}`
       );
       if (!res.ok) {
         throw new Error("Impossible de charger le lien ICS.");
@@ -704,12 +722,16 @@ export default function Home() {
         <div className="card-title">Calendrier (ICS)</div>
         <div className="grid">
           <div className="field">
+            <label>Commercial selectionne</label>
+            <input type="text" value={form.commercial} readOnly />
+          </div>
+          <div className="field">
             <label>Lien ICS</label>
             <input
               type="text"
               placeholder="https://.../calendar.ics"
-              value={form.icsUrl}
-              onChange={(e) => setForm({ ...form, icsUrl: e.target.value })}
+              value={commercialIcsUrl}
+              readOnly
             />
           </div>
         </div>
@@ -752,9 +774,9 @@ export default function Home() {
                   })
                 }
               >
-                {COMMERCIALS.map((name) => (
-                  <option key={name} value={name}>
-                    {name}
+                {COMMERCIALS.map((item) => (
+                  <option key={item.name} value={item.name}>
+                    {item.name}
                   </option>
                 ))}
               </select>
