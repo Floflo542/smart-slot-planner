@@ -953,11 +953,25 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
         ).length;
         const travelCost = best.travelFromPrev + best.travelToNext;
 
-        const candidate = { slot: best, missingLocations, cost: travelCost };
+        const candidate = {
+          slot: best,
+          missingLocations,
+          cost: travelCost,
+          dayEvents: dayEvents.length,
+        };
 
         if (!chosen) {
           chosen = candidate;
-          chosenDayEvents = dayEvents.length;
+          chosenDayEvents = candidate.dayEvents;
+          continue;
+        }
+
+        if (candidate.dayEvents > 0 && chosenDayEvents === 0) {
+          chosen = candidate;
+          chosenDayEvents = candidate.dayEvents;
+          continue;
+        }
+        if (candidate.dayEvents === 0 && chosenDayEvents > 0) {
           continue;
         }
 
@@ -968,7 +982,7 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
               candidate.cost < chosen.cost)
           ) {
             chosen = candidate;
-            chosenDayEvents = dayEvents.length;
+            chosenDayEvents = candidate.dayEvents;
           }
         } else {
           if (
@@ -977,7 +991,7 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
               candidate.slot.start < chosen.slot.start)
           ) {
             chosen = candidate;
-            chosenDayEvents = dayEvents.length;
+            chosenDayEvents = candidate.dayEvents;
           }
         }
       }
