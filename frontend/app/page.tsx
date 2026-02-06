@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 const DURATION_MIN = {
   training: 60,
@@ -13,20 +13,17 @@ const DEFAULT_DAY_START = "07:30";
 const DEFAULT_DAY_END = "16:30";
 const DEFAULT_BUFFER_MIN = 10;
 const DEFAULT_SEARCH_DAYS = 10;
+const DEFAULT_ICS_URL =
+  "https://outlook.office365.com/owa/calendar/df8485983c5d4b38b8bbf8800a546eec@unox.com/9d9e207ca6414d4ca8be7c0f3070313715591987231137818096/calendar.ics";
+const COMMERCIALS = ["Florian Monoyer"] as const;
 
 type VisitType = keyof typeof DURATION_MIN;
+type Commercial = (typeof COMMERCIALS)[number];
 
 type GeoPoint = {
   label: string;
   lat: number;
   lon: number;
-};
-
-type TokenBundle = {
-  access_token: string;
-  refresh_token?: string;
-  expires_at: number;
-  scope?: string;
 };
 
 type FixedEvent = {
@@ -54,8 +51,6 @@ type IcsPayload = {
   description: string;
 };
 
-type CalendarSource = "outlook" | "ics_url" | "ics_file";
-
 type IcsEvent = {
   summary: string;
   location: string;
@@ -65,6 +60,7 @@ type IcsEvent = {
 };
 
 type FormState = {
+  commercial: Commercial;
   homeAddress: string;
   appointmentAddress: string;
   appointmentTitle: string;
@@ -74,42 +70,8 @@ type FormState = {
   searchDays: string;
   includeWeekends: boolean;
   optimizeMode: "travel" | "earliest";
-  calendarSource: CalendarSource;
   icsUrl: string;
-  autoCreate: boolean;
 };
-
-const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
-const OUTLOOK_SCOPES = "User.Read Calendars.ReadWrite offline_access";
-
-const TOKEN_KEY = "ssp_outlook_tokens_v1";
-const VERIFIER_KEY = "ssp_outlook_verifier_v1";
-const STATE_KEY = "ssp_outlook_state_v1";
-
-const OUTLOOK_TENANT = process.env.NEXT_PUBLIC_OUTLOOK_TENANT || "common";
-const OUTLOOK_CLIENT_ID = process.env.NEXT_PUBLIC_OUTLOOK_CLIENT_ID || "";
-const OUTLOOK_REDIRECT_URI = process.env.NEXT_PUBLIC_OUTLOOK_REDIRECT_URI || "";
-
-function base64UrlEncode(bytes: Uint8Array) {
-  let binary = "";
-  bytes.forEach((b) => {
-    binary += String.fromCharCode(b);
-  });
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-function randomBase64Url(size: number) {
-  const bytes = new Uint8Array(size);
-  crypto.getRandomValues(bytes);
-  return base64UrlEncode(bytes);
-}
-
-async function sha256(text: string) {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(text);
-  const digest = await crypto.subtle.digest("SHA-256", data);
-  return base64UrlEncode(new Uint8Array(digest));
-}
 
 function localDateString(date = new Date()) {
   const offset = date.getTimezoneOffset() * 60000;
@@ -118,15 +80,6 @@ function localDateString(date = new Date()) {
 
 function parseDateTime(dateStr: string, timeStr: string) {
   return new Date(`${dateStr}T${timeStr}:00`);
-}
-
-function toLocalIso(date: Date) {
-  const pad = (value: number) => String(value).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(
-    date.getDate()
-  )}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(
-    date.getSeconds()
-  )}`;
 }
 
 function formatHHMM(date: Date) {
@@ -364,24 +317,6 @@ function isOnlineLocation(label: string) {
   ].some((token) => lower.includes(token));
 }
 
-function loadTokens(): TokenBundle | null {
-  try {
-    const raw = sessionStorage.getItem(TOKEN_KEY);
-    if (!raw) return null;
-    return JSON.parse(raw) as TokenBundle;
-  } catch {
-    return null;
-  }
-}
-
-function saveTokens(tokens: TokenBundle) {
-  sessionStorage.setItem(TOKEN_KEY, JSON.stringify(tokens));
-}
-
-function clearTokens() {
-  sessionStorage.removeItem(TOKEN_KEY);
-}
-
 function mergeBusyEvents(events: FixedEvent[]) {
   const sorted = [...events].sort((a, b) => a.start.getTime() - b.start.getTime());
   const merged: FixedEvent[] = [];
@@ -483,14 +418,11 @@ function findBestSlot(params: {
 
 export default function Home() {
   const [status, setStatus] = useState("Prêt.");
-  const [outlookConnected, setOutlookConnected] = useState(false);
-  const [outlookUser, setOutlookUser] = useState<string | null>(null);
   const [result, setResult] = useState<BestSlot | null>(null);
   const [icsPayload, setIcsPayload] = useState<IcsPayload | null>(null);
-  const [createdEventId, setCreatedEventId] = useState<string | null>(null);
-  const [icsFile, setIcsFile] = useState<File | null>(null);
 
   const [form, setForm] = useState<FormState>({
+    commercial: "Florian Monoyer",
     homeAddress: DEFAULT_HOME_ADDRESS,
     appointmentAddress: "",
     appointmentTitle: "",
@@ -500,198 +432,15 @@ export default function Home() {
     searchDays: String(DEFAULT_SEARCH_DAYS),
     includeWeekends: false,
     optimizeMode: "travel",
-    calendarSource: "ics_url",
-    icsUrl: "",
-    autoCreate: true,
+    icsUrl: DEFAULT_ICS_URL,
   });
 
   const geocodeCache = useRef(new Map<string, GeoPoint | null>());
-
-  const hasOutlookConfig = Boolean(OUTLOOK_CLIENT_ID && OUTLOOK_REDIRECT_URI);
-  const connectDisabled = !hasOutlookConfig;
-  const authority = `https://login.microsoftonline.com/${OUTLOOK_TENANT}/oauth2/v2.0`;
 
   const timezone = useMemo(
     () => Intl.DateTimeFormat().resolvedOptions().timeZone,
     []
   );
-
-  useEffect(() => {
-    const run = async () => {
-      const params = new URLSearchParams(window.location.search);
-      const error = params.get("error");
-      const errorDescription = params.get("error_description");
-      const code = params.get("code");
-      const state = params.get("state");
-
-      if (error) {
-        setStatus(`Erreur Outlook: ${errorDescription || error}`);
-      }
-
-      if (code) {
-        try {
-          await exchangeCodeForToken(code, state);
-          window.history.replaceState({}, document.title, window.location.pathname);
-        } catch (err: any) {
-          setStatus(`Erreur auth Outlook: ${err?.message || String(err)}`);
-        }
-      }
-
-      const token = await getAccessToken();
-      if (token) {
-        setOutlookConnected(true);
-        await fetchProfile(token);
-      }
-    };
-
-    run();
-  }, []);
-
-  async function exchangeCodeForToken(code: string, state?: string | null) {
-    if (!hasOutlookConfig) {
-      throw new Error("Configuration Outlook manquante");
-    }
-
-    const storedState = sessionStorage.getItem(STATE_KEY);
-    const verifier = sessionStorage.getItem(VERIFIER_KEY);
-
-    if (!verifier) {
-      throw new Error("Code verifier introuvable. Relancer la connexion.");
-    }
-
-    if (state && storedState && state !== storedState) {
-      throw new Error("État OAuth invalide.");
-    }
-
-    const body = new URLSearchParams({
-      client_id: OUTLOOK_CLIENT_ID,
-      grant_type: "authorization_code",
-      code,
-      redirect_uri: OUTLOOK_REDIRECT_URI,
-      code_verifier: verifier,
-      scope: OUTLOOK_SCOPES,
-    });
-
-    const res = await fetch(`${authority}/token`, {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body,
-    });
-
-    const json = await res.json();
-    if (!res.ok) {
-      throw new Error(json?.error_description || "Erreur de token OAuth");
-    }
-
-    const expiresAt = Date.now() + (json.expires_in ?? 3600) * 1000 - 30000;
-    saveTokens({
-      access_token: json.access_token,
-      refresh_token: json.refresh_token,
-      expires_at: expiresAt,
-      scope: json.scope,
-    });
-
-    sessionStorage.removeItem(VERIFIER_KEY);
-    sessionStorage.removeItem(STATE_KEY);
-  }
-
-  async function refreshAccessToken(refreshToken: string) {
-    const body = new URLSearchParams({
-      client_id: OUTLOOK_CLIENT_ID,
-      grant_type: "refresh_token",
-      refresh_token: refreshToken,
-      scope: OUTLOOK_SCOPES,
-    });
-
-    const res = await fetch(`${authority}/token`, {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body,
-    });
-
-    const json = await res.json();
-    if (!res.ok) {
-      throw new Error(json?.error_description || "Erreur de refresh token");
-    }
-
-    const expiresAt = Date.now() + (json.expires_in ?? 3600) * 1000 - 30000;
-    const updated: TokenBundle = {
-      access_token: json.access_token,
-      refresh_token: json.refresh_token || refreshToken,
-      expires_at: expiresAt,
-      scope: json.scope,
-    };
-    saveTokens(updated);
-    return updated.access_token;
-  }
-
-  async function getAccessToken() {
-    const tokens = loadTokens();
-    if (!tokens) return null;
-
-    if (tokens.expires_at > Date.now()) {
-      return tokens.access_token;
-    }
-
-    if (tokens.refresh_token) {
-      try {
-        return await refreshAccessToken(tokens.refresh_token);
-      } catch {
-        clearTokens();
-        return null;
-      }
-    }
-
-    return null;
-  }
-
-  async function fetchProfile(token: string) {
-    try {
-      const res = await fetch(`${GRAPH_BASE}/me`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) return;
-      const json = await res.json();
-      const name = json.mail || json.userPrincipalName || json.displayName;
-      if (name) setOutlookUser(name);
-    } catch {
-      // silent
-    }
-  }
-
-  async function startOutlookLogin() {
-    if (!hasOutlookConfig) {
-      setStatus("Configurez les variables Outlook sur Vercel.");
-      return;
-    }
-
-    const verifier = randomBase64Url(64);
-    const challenge = await sha256(verifier);
-    const state = randomBase64Url(16);
-
-    sessionStorage.setItem(VERIFIER_KEY, verifier);
-    sessionStorage.setItem(STATE_KEY, state);
-
-    const params = new URLSearchParams({
-      client_id: OUTLOOK_CLIENT_ID,
-      response_type: "code",
-      redirect_uri: OUTLOOK_REDIRECT_URI,
-      response_mode: "query",
-      scope: OUTLOOK_SCOPES,
-      code_challenge: challenge,
-      code_challenge_method: "S256",
-      state,
-    });
-
-    window.location.href = `${authority}/authorize?${params.toString()}`;
-  }
-
-  function disconnectOutlook() {
-    clearTokens();
-    setOutlookConnected(false);
-    setOutlookUser(null);
-    setStatus("Déconnecté d'Outlook.");
-  }
 
   async function geocodeAddress(label: string): Promise<GeoPoint> {
     const cached = geocodeCache.current.get(label);
@@ -775,139 +524,11 @@ export default function Home() {
     return fixed;
   }
 
-  async function fetchCalendarEvents(token: string, dayStart: Date, dayEnd: Date) {
-    let url = `${GRAPH_BASE}/me/calendarView?startDateTime=${encodeURIComponent(
-      dayStart.toISOString()
-    )}&endDateTime=${encodeURIComponent(dayEnd.toISOString())}&$top=50`;
-    const all: any[] = [];
-
-    while (url) {
-      const res = await fetch(url, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Prefer: `outlook.timezone="${timezone}"`,
-        },
-      });
-      const json = await res.json();
-
-      if (!res.ok) {
-        throw new Error(json?.error?.message || "Erreur de lecture calendrier");
-      }
-
-      all.push(...(json.value || []));
-      url = json["@odata.nextLink"] || "";
-    }
-
-    return all;
-  }
-
-  async function buildFixedEvents(
-    rawEvents: any[],
-    dayStart: Date,
-    dayEnd: Date
-  ) {
-    const fixed: FixedEvent[] = [];
-
-    for (const evt of rawEvents) {
-      if (evt.isCancelled) continue;
-      if (evt.showAs && evt.showAs === "free") continue;
-
-      const isAllDay = Boolean(evt.isAllDay);
-      const rawStart = evt.start?.dateTime;
-      const rawEnd = evt.end?.dateTime;
-      if (!rawStart || !rawEnd) continue;
-
-      const start = isAllDay ? dayStart : new Date(rawStart);
-      const end = isAllDay ? dayEnd : new Date(rawEnd);
-
-      const clampedStart = clampDate(start, dayStart, dayEnd);
-      const clampedEnd = clampDate(end, dayStart, dayEnd);
-
-      if (clampedEnd.getTime() <= clampedStart.getTime()) continue;
-
-      let location: GeoPoint | null = null;
-      const label = evt.subject || "RDV";
-      const locationLabel =
-        evt.location?.displayName || evt.locations?.[0]?.displayName || "";
-
-      if (locationLabel && !isOnlineLocation(locationLabel)) {
-        try {
-          location = await geocodeAddress(locationLabel);
-        } catch {
-          location = null;
-        }
-      }
-
-      fixed.push({
-        id: evt.id || `${label}-${rawStart}`,
-        label,
-        start: clampedStart,
-        end: clampedEnd,
-        location,
-        locationLabel: locationLabel || null,
-      });
-    }
-
-    return fixed;
-  }
-
-  async function createOutlookEvent(
-    token: string,
-    payload: {
-      subject: string;
-      start: Date;
-      end: Date;
-      location: string;
-      body?: string;
-    }
-  ) {
-    const res = await fetch(`${GRAPH_BASE}/me/events`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        subject: payload.subject,
-        start: {
-          dateTime: toLocalIso(payload.start),
-          timeZone: timezone,
-        },
-        end: {
-          dateTime: toLocalIso(payload.end),
-          timeZone: timezone,
-        },
-        location: {
-          displayName: payload.location,
-        },
-        body: payload.body
-          ? {
-              contentType: "text",
-              content: payload.body,
-            }
-          : undefined,
-      }),
-    });
-
-    const json = await res.json();
-    if (!res.ok) {
-      throw new Error(json?.error?.message || "Erreur de création du RDV");
-    }
-
-    return json;
-  }
-
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setStatus("Analyse du meilleur créneau...");
     setResult(null);
     setIcsPayload(null);
-    setCreatedEventId(null);
-
-    if (!outlookConnected) {
-      setStatus("Connectez Outlook avant de planifier.");
-      return;
-    }
 
     if (!form.homeAddress.trim()) {
       setStatus("Adresse de départ manquante.");
@@ -940,45 +561,23 @@ export default function Home() {
       form.optimizeMode === "travel" ? "trajets optimises" : "plus tot possible";
     setStatus(`Analyse des ${searchDays} prochains ${windowLabel} (${modeLabel})...`);
 
-    const needsOutlook = form.calendarSource === "outlook";
-    const needsIcsUrl = form.calendarSource === "ics_url";
-    const needsIcsFile = form.calendarSource === "ics_file";
-
-    if (needsIcsUrl && !form.icsUrl.trim()) {
+    if (!form.icsUrl.trim()) {
       setStatus("Ajoutez un lien ICS valide.");
       return;
     }
 
-    if (needsIcsFile && !icsFile) {
-      setStatus("Ajoutez un fichier ICS.");
-      return;
-    }
-
     try {
-      const token = needsOutlook ? await getAccessToken() : null;
-      if (needsOutlook && !token) {
-        setStatus("Token Outlook expiré. Reconnectez-vous.");
-        setOutlookConnected(false);
-        return;
-      }
-
       const home = await geocodeAddress(form.homeAddress.trim());
       const appointment = await geocodeAddress(form.appointmentAddress.trim());
 
-      let icsEvents: IcsEvent[] = [];
-      if (needsIcsUrl) {
-        const res = await fetch(
-          `/api/ics?url=${encodeURIComponent(form.icsUrl.trim())}`
-        );
-        if (!res.ok) {
-          throw new Error("Impossible de charger le lien ICS.");
-        }
-        const text = await res.text();
-        icsEvents = parseIcsEvents(text);
-      } else if (needsIcsFile && icsFile) {
-        const text = await icsFile.text();
-        icsEvents = parseIcsEvents(text);
+      const res = await fetch(
+        `/api/ics?url=${encodeURIComponent(form.icsUrl.trim())}`
+      );
+      if (!res.ok) {
+        throw new Error("Impossible de charger le lien ICS.");
       }
+      const text = await res.text();
+      const icsEvents = parseIcsEvents(text);
 
       const now = new Date();
       const candidates = buildDateCandidates(searchDays, form.includeWeekends);
@@ -1000,13 +599,7 @@ export default function Home() {
           continue;
         }
 
-        let fixed: FixedEvent[] = [];
-        if (needsOutlook && token) {
-          const events = await fetchCalendarEvents(token, dayStart, dayEnd);
-          fixed = await buildFixedEvents(events, dayStart, dayEnd);
-        } else {
-          fixed = await buildFixedEventsFromIcs(icsEvents, dayStart, dayEnd);
-        }
+        const fixed = await buildFixedEventsFromIcs(icsEvents, dayStart, dayEnd);
 
         const best = findBestSlot({
           dayStart,
@@ -1064,7 +657,7 @@ export default function Home() {
       const notes: string[] = [...chosen.slot.notes];
       if (chosen.missingLocations > 0) {
         notes.push(
-          `${chosen.missingLocations} RDV Outlook sans geocodage: trajets estimes a 0 min.`
+          `${chosen.missingLocations} RDV calendrier sans geocodage: trajets estimes a 0 min.`
         );
       }
 
@@ -1074,39 +667,20 @@ export default function Home() {
       const subject =
         form.appointmentTitle.trim() ||
         `${form.type.toUpperCase()} — ${form.appointmentAddress.trim()}`;
-      const description = `Type: ${form.type}\nAdresse: ${form.appointmentAddress.trim()}\nTrajet estimé: ${enrichedBest.travelFromPrev} min (aller) / ${enrichedBest.travelToNext} min (retour).`;
+      const description = `Commercial: ${form.commercial}\nType: ${form.type}\nAdresse: ${form.appointmentAddress.trim()}\nTrajet estime: ${enrichedBest.travelFromPrev} min (aller) / ${enrichedBest.travelToNext} min (retour).`;
       setIcsPayload({
         summary: subject,
         location: form.appointmentAddress.trim(),
         description,
       });
 
-      if (form.autoCreate && needsOutlook && token) {
-        const created = await createOutlookEvent(token, {
-          subject,
-          start: enrichedBest.start,
-          end: enrichedBest.end,
-          location: form.appointmentAddress.trim(),
-          body: description,
-        });
-
-        setCreatedEventId(created?.id || null);
-        setStatus(
-          `RDV cree dans Outlook le ${formatDateLabel(
-            enrichedBest.start
-          )} : ${formatHHMM(enrichedBest.start)} - ${formatHHMM(
-            enrichedBest.end
-          )}`
-        );
-      } else {
-        setStatus(
-          `Creneau recommande le ${formatDateLabel(
-            enrichedBest.start
-          )} : ${formatHHMM(enrichedBest.start)} - ${formatHHMM(
-            enrichedBest.end
-          )}`
-        );
-      }
+      setStatus(
+        `Creneau recommande le ${formatDateLabel(
+          enrichedBest.start
+        )} : ${formatHHMM(enrichedBest.start)} - ${formatHHMM(
+          enrichedBest.end
+        )}`
+      );
     } catch (err: any) {
       setStatus(`Erreur: ${err?.message || String(err)}`);
     }
@@ -1118,103 +692,30 @@ export default function Home() {
         <img className="logo" src="/unox-logo.png" alt="Unox" />
       </div>
       <header className="hero">
-        <div className="eyebrow">Planification + Outlook</div>
+        <div className="eyebrow">Planification intelligente</div>
         <h1>Smart Slot Planner</h1>
         <p>
-          Connectez Outlook, saisissez l'adresse du prochain RDV et laissez le
-          planner proposer le meilleur créneau avec ajout automatique.
+          Importez votre calendrier via un lien ICS, saisissez l'adresse du
+          prochain RDV et laissez le planner proposer le meilleur créneau.
         </p>
       </header>
 
       <section className="card">
-        <div className="card-title">Source calendrier</div>
+        <div className="card-title">Calendrier (ICS)</div>
         <div className="grid">
           <div className="field">
-            <label>Source</label>
-            <select
-              value={form.calendarSource}
-              onChange={(e) =>
-                setForm({
-                  ...form,
-                  calendarSource: e.target.value as CalendarSource,
-                })
-              }
-            >
-              <option value="ics_url">Lien ICS</option>
-              <option value="ics_file">Fichier ICS</option>
-              <option value="outlook">Connexion Outlook</option>
-            </select>
+            <label>Lien ICS</label>
+            <input
+              type="text"
+              placeholder="https://.../calendar.ics"
+              value={form.icsUrl}
+              onChange={(e) => setForm({ ...form, icsUrl: e.target.value })}
+            />
           </div>
-          {form.calendarSource === "ics_url" ? (
-            <div className="field">
-              <label>Lien ICS</label>
-              <input
-                type="text"
-                placeholder="https://.../calendar.ics"
-                value={form.icsUrl}
-                onChange={(e) => setForm({ ...form, icsUrl: e.target.value })}
-              />
-            </div>
-          ) : null}
-          {form.calendarSource === "ics_file" ? (
-            <div className="field">
-              <label>Fichier ICS</label>
-              <input
-                type="file"
-                accept=".ics,text/calendar"
-                onChange={(e) => setIcsFile(e.target.files?.[0] || null)}
-              />
-            </div>
-          ) : null}
         </div>
-        {form.calendarSource === "outlook" ? (
-          <>
-            <div className="row" style={{ marginTop: 12 }}>
-              <span className="badge">
-                {outlookConnected
-                  ? `Connecté${outlookUser ? ` · ${outlookUser}` : ""}`
-                  : "Non connecté"}
-              </span>
-              {!hasOutlookConfig ? (
-                <span className="small">
-                  Renseignez NEXT_PUBLIC_OUTLOOK_CLIENT_ID et
-                  NEXT_PUBLIC_OUTLOOK_REDIRECT_URI sur Vercel.
-                </span>
-              ) : null}
-            </div>
-            <div className="row">
-              <button
-                className="btn primary"
-                type="button"
-                onClick={startOutlookLogin}
-                disabled={connectDisabled}
-                title={
-                  connectDisabled
-                    ? "Configurez NEXT_PUBLIC_OUTLOOK_CLIENT_ID et NEXT_PUBLIC_OUTLOOK_REDIRECT_URI"
-                    : ""
-                }
-              >
-                Connecter Outlook
-              </button>
-              <button
-                className="btn ghost"
-                type="button"
-                onClick={disconnectOutlook}
-              >
-                Déconnecter
-              </button>
-            </div>
-            <p className="small" style={{ marginTop: 10 }}>
-              Permissions demandées: lecture/écriture du calendrier et profil
-              utilisateur.
-            </p>
-          </>
-        ) : (
-          <p className="small" style={{ marginTop: 10 }}>
-            Sans Azure, utilisez un lien ICS publie ou exportez un fichier ICS
-            depuis Outlook.
-          </p>
-        )}
+        <p className="small" style={{ marginTop: 10 }}>
+          Utilisez un lien ICS publie depuis Outlook (lecture seule).
+        </p>
       </section>
 
       <section className="card">
@@ -1238,6 +739,24 @@ export default function Home() {
                 <option value="demo">Demo</option>
                 <option value="training">Training</option>
                 <option value="reseller">Reseller</option>
+              </select>
+            </div>
+            <div className="field">
+              <label>Commercial</label>
+              <select
+                value={form.commercial}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    commercial: e.target.value as Commercial,
+                  })
+                }
+              >
+                {COMMERCIALS.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
               </select>
             </div>
             <div className="field">
@@ -1333,23 +852,6 @@ export default function Home() {
           </div>
 
           <div className="row" style={{ marginTop: 14 }}>
-            <label
-              className="inline"
-              style={{ display: "flex", alignItems: "center", gap: 8 }}
-            >
-              <input
-                type="checkbox"
-                checked={form.autoCreate}
-                onChange={(e) =>
-                  setForm({ ...form, autoCreate: e.target.checked })
-                }
-                disabled={form.calendarSource !== "outlook"}
-              />
-              Ajouter automatiquement via Outlook (connexion requise)
-            </label>
-          </div>
-
-          <div className="row" style={{ marginTop: 14 }}>
             <button className="btn primary" type="submit">
               Trouver le meilleur créneau
             </button>
@@ -1396,15 +898,6 @@ export default function Home() {
               <div className="small">
                 {result.travelToNext} min vers {result.nextLabel || "fin"}
               </div>
-            </div>
-            <div className="result-card">
-              <div className="small">Ajout Outlook</div>
-              <div style={{ fontSize: 18, fontWeight: 600 }}>
-                {createdEventId ? "Créé" : form.autoCreate ? "En attente" : "Non créé"}
-              </div>
-              {createdEventId ? (
-                <div className="small">ID: {createdEventId}</div>
-              ) : null}
             </div>
           </div>
           {result.notes.length ? (
