@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 const USER_AGENT =
   process.env.GEOCODE_USER_AGENT ||
   "smart-slot-planner/1.0 (geocode; contact: dev@example.com)";
+const GEOCODE_EMAIL = process.env.GEOCODE_EMAIL || "dev@example.com";
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
@@ -16,14 +17,14 @@ export async function GET(req: Request) {
     );
   }
 
-  const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(
-    q
-  )}`;
+  const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=0&limit=1&countrycodes=be&email=${encodeURIComponent(
+    GEOCODE_EMAIL
+  )}&q=${encodeURIComponent(q)}`;
 
   const upstream = await fetch(url, {
     headers: {
       "User-Agent": USER_AGENT,
-      "Accept-Language": "fr",
+      "Accept-Language": "fr,nl,en",
     },
   });
 
