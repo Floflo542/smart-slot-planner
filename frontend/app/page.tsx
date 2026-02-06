@@ -54,6 +54,16 @@ type IcsPayload = {
   description: string;
 };
 
+type CalendarSource = "outlook" | "ics_url" | "ics_file";
+
+type IcsEvent = {
+  summary: string;
+  location: string;
+  start: Date;
+  end: Date;
+  isAllDay: boolean;
+};
+
 type FormState = {
   homeAddress: string;
   appointmentAddress: string;
@@ -64,6 +74,8 @@ type FormState = {
   searchDays: string;
   includeWeekends: boolean;
   optimizeMode: "travel" | "earliest";
+  calendarSource: CalendarSource;
+  icsUrl: string;
   autoCreate: boolean;
 };
 
@@ -127,6 +139,95 @@ function formatIcsDate(date: Date) {
     .toISOString()
     .replace(/[-:]/g, "")
     .replace(/\.\d{3}Z$/, "Z");
+}
+
+function parseIcsDate(value: string, isDateOnly: boolean) {
+  if (isDateOnly) {
+    const year = Number.parseInt(value.slice(0, 4), 10);
+    const month = Number.parseInt(value.slice(4, 6), 10) - 1;
+    const day = Number.parseInt(value.slice(6, 8), 10);
+    return new Date(year, month, day, 0, 0, 0);
+  }
+
+  const match = value.match(
+    /^(\\d{4})(\\d{2})(\\d{2})T(\\d{2})(\\d{2})(\\d{2})?(Z)?$/
+  );
+  if (!match) {
+    return new Date(value);
+  }
+
+  const [, y, m, d, hh, mm, ss, zulu] = match;
+  const year = Number.parseInt(y, 10);
+  const month = Number.parseInt(m, 10) - 1;
+  const day = Number.parseInt(d, 10);
+  const hour = Number.parseInt(hh, 10);
+  const min = Number.parseInt(mm, 10);
+  const sec = Number.parseInt(ss || "0", 10);
+
+  if (zulu) {
+    return new Date(Date.UTC(year, month, day, hour, min, sec));
+  }
+  return new Date(year, month, day, hour, min, sec);
+}
+
+function parseIcsEvents(text: string): IcsEvent[] {
+  const rawLines = text.replace(/\\r/g, "").split("\\n");
+  const lines: string[] = [];
+
+  for (const line of rawLines) {
+    if (!line) continue;
+    if (line.startsWith(" ") || line.startsWith("\\t")) {
+      const prev = lines[lines.length - 1] || "";
+      lines[lines.length - 1] = prev + line.trim();
+    } else {
+      lines.push(line.trim());
+    }
+  }
+
+  const events: IcsEvent[] = [];
+  let current: Partial<IcsEvent> | null = null;
+  let currentAllDay = false;
+
+  for (const line of lines) {
+    if (line === "BEGIN:VEVENT") {
+      current = {};
+      currentAllDay = false;
+      continue;
+    }
+    if (line === "END:VEVENT") {
+      if (current?.start && current.end) {
+        events.push({
+          summary: current.summary || "RDV",
+          location: current.location || "",
+          start: current.start,
+          end: current.end,
+          isAllDay: currentAllDay,
+        });
+      }
+      current = null;
+      continue;
+    }
+    if (!current) continue;
+
+    const [left, value = ""] = line.split(":");
+    const [prop, ...paramParts] = left.split(";");
+    const params = paramParts.join(";").toUpperCase();
+
+    if (prop === "SUMMARY") {
+      current.summary = value;
+    } else if (prop === "LOCATION") {
+      current.location = value;
+    } else if (prop === "DTSTART") {
+      const isDateOnly = params.includes("VALUE=DATE") || value.length === 8;
+      current.start = parseIcsDate(value, isDateOnly);
+      currentAllDay = isDateOnly;
+    } else if (prop === "DTEND") {
+      const isDateOnly = params.includes("VALUE=DATE") || value.length === 8;
+      current.end = parseIcsDate(value, isDateOnly);
+    }
+  }
+
+  return events;
 }
 
 function escapeIcsText(value: string) {
@@ -387,6 +488,7 @@ export default function Home() {
   const [result, setResult] = useState<BestSlot | null>(null);
   const [icsPayload, setIcsPayload] = useState<IcsPayload | null>(null);
   const [createdEventId, setCreatedEventId] = useState<string | null>(null);
+  const [icsFile, setIcsFile] = useState<File | null>(null);
 
   const [form, setForm] = useState<FormState>({
     homeAddress: DEFAULT_HOME_ADDRESS,
@@ -398,6 +500,8 @@ export default function Home() {
     searchDays: String(DEFAULT_SEARCH_DAYS),
     includeWeekends: false,
     optimizeMode: "travel",
+    calendarSource: "ics_url",
+    icsUrl: "",
     autoCreate: true,
   });
 
@@ -614,6 +718,63 @@ export default function Home() {
     return point;
   }
 
+  function filterIcsEventsForDay(
+    events: IcsEvent[],
+    dayStart: Date,
+    dayEnd: Date
+  ) {
+    return events.filter((evt) => {
+      if (evt.isAllDay) {
+        return evt.start <= dayEnd && evt.end >= dayStart;
+      }
+      return evt.end > dayStart && evt.start < dayEnd;
+    });
+  }
+
+  async function buildFixedEventsFromIcs(
+    events: IcsEvent[],
+    dayStart: Date,
+    dayEnd: Date
+  ) {
+    const fixed: FixedEvent[] = [];
+    const dayEvents = filterIcsEventsForDay(events, dayStart, dayEnd);
+
+    for (const evt of dayEvents) {
+      const clampedStart = clampDate(
+        evt.isAllDay ? dayStart : evt.start,
+        dayStart,
+        dayEnd
+      );
+      const clampedEnd = clampDate(
+        evt.isAllDay ? dayEnd : evt.end,
+        dayStart,
+        dayEnd
+      );
+      if (clampedEnd.getTime() <= clampedStart.getTime()) continue;
+
+      let location: GeoPoint | null = null;
+      const locationLabel = evt.location || "";
+      if (locationLabel && !isOnlineLocation(locationLabel)) {
+        try {
+          location = await geocodeAddress(locationLabel);
+        } catch {
+          location = null;
+        }
+      }
+
+      fixed.push({
+        id: `${evt.summary}-${evt.start.toISOString()}`,
+        label: evt.summary || "RDV",
+        start: clampedStart,
+        end: clampedEnd,
+        location,
+        locationLabel: locationLabel || null,
+      });
+    }
+
+    return fixed;
+  }
+
   async function fetchCalendarEvents(token: string, dayStart: Date, dayEnd: Date) {
     let url = `${GRAPH_BASE}/me/calendarView?startDateTime=${encodeURIComponent(
       dayStart.toISOString()
@@ -779,9 +940,23 @@ export default function Home() {
       form.optimizeMode === "travel" ? "trajets optimises" : "plus tot possible";
     setStatus(`Analyse des ${searchDays} prochains ${windowLabel} (${modeLabel})...`);
 
+    const needsOutlook = form.calendarSource === "outlook";
+    const needsIcsUrl = form.calendarSource === "ics_url";
+    const needsIcsFile = form.calendarSource === "ics_file";
+
+    if (needsIcsUrl && !form.icsUrl.trim()) {
+      setStatus("Ajoutez un lien ICS valide.");
+      return;
+    }
+
+    if (needsIcsFile && !icsFile) {
+      setStatus("Ajoutez un fichier ICS.");
+      return;
+    }
+
     try {
-      const token = await getAccessToken();
-      if (!token) {
+      const token = needsOutlook ? await getAccessToken() : null;
+      if (needsOutlook && !token) {
         setStatus("Token Outlook expiré. Reconnectez-vous.");
         setOutlookConnected(false);
         return;
@@ -789,6 +964,21 @@ export default function Home() {
 
       const home = await geocodeAddress(form.homeAddress.trim());
       const appointment = await geocodeAddress(form.appointmentAddress.trim());
+
+      let icsEvents: IcsEvent[] = [];
+      if (needsIcsUrl) {
+        const res = await fetch(
+          `/api/ics?url=${encodeURIComponent(form.icsUrl.trim())}`
+        );
+        if (!res.ok) {
+          throw new Error("Impossible de charger le lien ICS.");
+        }
+        const text = await res.text();
+        icsEvents = parseIcsEvents(text);
+      } else if (needsIcsFile && icsFile) {
+        const text = await icsFile.text();
+        icsEvents = parseIcsEvents(text);
+      }
 
       const now = new Date();
       const candidates = buildDateCandidates(searchDays, form.includeWeekends);
@@ -810,8 +1000,13 @@ export default function Home() {
           continue;
         }
 
-        const events = await fetchCalendarEvents(token, dayStart, dayEnd);
-        const fixed = await buildFixedEvents(events, dayStart, dayEnd);
+        let fixed: FixedEvent[] = [];
+        if (needsOutlook && token) {
+          const events = await fetchCalendarEvents(token, dayStart, dayEnd);
+          fixed = await buildFixedEvents(events, dayStart, dayEnd);
+        } else {
+          fixed = await buildFixedEventsFromIcs(icsEvents, dayStart, dayEnd);
+        }
 
         const best = findBestSlot({
           dayStart,
@@ -886,7 +1081,7 @@ export default function Home() {
         description,
       });
 
-      if (form.autoCreate) {
+      if (form.autoCreate && needsOutlook && token) {
         const created = await createOutlookEvent(token, {
           subject,
           start: enrichedBest.start,
@@ -932,41 +1127,94 @@ export default function Home() {
       </header>
 
       <section className="card">
-        <div className="card-title">Connexion Outlook</div>
-        <div className="row" style={{ marginBottom: 10 }}>
-          <span className="badge">
-            {outlookConnected
-              ? `Connecté${outlookUser ? ` · ${outlookUser}` : ""}`
-              : "Non connecté"}
-          </span>
-          {!hasOutlookConfig ? (
-            <span className="small">
-              Renseignez NEXT_PUBLIC_OUTLOOK_CLIENT_ID et
-              NEXT_PUBLIC_OUTLOOK_REDIRECT_URI sur Vercel.
-            </span>
+        <div className="card-title">Source calendrier</div>
+        <div className="grid">
+          <div className="field">
+            <label>Source</label>
+            <select
+              value={form.calendarSource}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  calendarSource: e.target.value as CalendarSource,
+                })
+              }
+            >
+              <option value="ics_url">Lien ICS</option>
+              <option value="ics_file">Fichier ICS</option>
+              <option value="outlook">Connexion Outlook</option>
+            </select>
+          </div>
+          {form.calendarSource === "ics_url" ? (
+            <div className="field">
+              <label>Lien ICS</label>
+              <input
+                type="text"
+                placeholder="https://.../calendar.ics"
+                value={form.icsUrl}
+                onChange={(e) => setForm({ ...form, icsUrl: e.target.value })}
+              />
+            </div>
+          ) : null}
+          {form.calendarSource === "ics_file" ? (
+            <div className="field">
+              <label>Fichier ICS</label>
+              <input
+                type="file"
+                accept=".ics,text/calendar"
+                onChange={(e) => setIcsFile(e.target.files?.[0] || null)}
+              />
+            </div>
           ) : null}
         </div>
-        <div className="row">
-          <button
-            className="btn primary"
-            type="button"
-            onClick={startOutlookLogin}
-            disabled={connectDisabled}
-            title={
-              connectDisabled
-                ? "Configurez NEXT_PUBLIC_OUTLOOK_CLIENT_ID et NEXT_PUBLIC_OUTLOOK_REDIRECT_URI"
-                : ""
-            }
-          >
-            Connecter Outlook
-          </button>
-          <button className="btn ghost" type="button" onClick={disconnectOutlook}>
-            Déconnecter
-          </button>
-        </div>
-        <p className="small" style={{ marginTop: 10 }}>
-          Permissions demandées: lecture/écriture du calendrier et profil utilisateur.
-        </p>
+        {form.calendarSource === "outlook" ? (
+          <>
+            <div className="row" style={{ marginTop: 12 }}>
+              <span className="badge">
+                {outlookConnected
+                  ? `Connecté${outlookUser ? ` · ${outlookUser}` : ""}`
+                  : "Non connecté"}
+              </span>
+              {!hasOutlookConfig ? (
+                <span className="small">
+                  Renseignez NEXT_PUBLIC_OUTLOOK_CLIENT_ID et
+                  NEXT_PUBLIC_OUTLOOK_REDIRECT_URI sur Vercel.
+                </span>
+              ) : null}
+            </div>
+            <div className="row">
+              <button
+                className="btn primary"
+                type="button"
+                onClick={startOutlookLogin}
+                disabled={connectDisabled}
+                title={
+                  connectDisabled
+                    ? "Configurez NEXT_PUBLIC_OUTLOOK_CLIENT_ID et NEXT_PUBLIC_OUTLOOK_REDIRECT_URI"
+                    : ""
+                }
+              >
+                Connecter Outlook
+              </button>
+              <button
+                className="btn ghost"
+                type="button"
+                onClick={disconnectOutlook}
+              >
+                Déconnecter
+              </button>
+            </div>
+            <p className="small" style={{ marginTop: 10 }}>
+              Permissions demandées: lecture/écriture du calendrier et profil
+              utilisateur.
+            </p>
+          </>
+        ) : (
+          <p className="small" style={{ marginTop: 10 }}>
+            Sans Azure, utilisez un lien ICS publie ou exportez un fichier ICS
+            depuis Outlook.
+          </p>
+        )}
       </section>
 
       <section className="card">
@@ -1095,6 +1343,7 @@ export default function Home() {
                 onChange={(e) =>
                   setForm({ ...form, autoCreate: e.target.checked })
                 }
+                disabled={form.calendarSource !== "outlook"}
               />
               Ajouter automatiquement via Outlook (connexion requise)
             </label>
