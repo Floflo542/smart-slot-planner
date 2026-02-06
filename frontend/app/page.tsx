@@ -719,9 +719,8 @@ export default function Home() {
       const candidates = buildDateCandidates(searchDays, form.includeWeekends);
 
       let chosen:
-        | { slot: BestSlot; missingLocations: number }
+        | { slot: BestSlot; missingLocations: number; cost: number }
         | null = null;
-      let bestCost = Number.POSITIVE_INFINITY;
 
       for (const day of candidates) {
         const dateStr = localDateString(day);
@@ -761,11 +760,11 @@ export default function Home() {
 
         if (
           !chosen ||
-          travelCost < bestCost ||
-          (travelCost === bestCost && best.start < chosen.slot.start)
+          best.start < chosen.slot.start ||
+          (best.start.getTime() === chosen.slot.start.getTime() &&
+            travelCost < chosen.cost)
         ) {
-          bestCost = travelCost;
-          chosen = { slot: best, missingLocations };
+          chosen = { slot: best, missingLocations, cost: travelCost };
         }
       }
 
