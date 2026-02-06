@@ -107,7 +107,7 @@ function parseIcsDate(value: string, isDateOnly: boolean) {
   }
 
   const match = value.match(
-    /^(\\d{4})(\\d{2})(\\d{2})T(\\d{2})(\\d{2})(\\d{2})?(Z)?$/
+    /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})?(Z)?$/
   );
   if (!match) {
     return new Date(value);
@@ -173,12 +173,12 @@ function parseFreeBusyRanges(value: string): IcsEvent[] {
 }
 
 function parseIcsEvents(text: string): IcsEvent[] {
-  const rawLines = text.replace(/\\r/g, "").split("\\n");
+  const rawLines = text.replace(/\r/g, "").split("\n");
   const lines: string[] = [];
 
   for (const line of rawLines) {
     if (!line) continue;
-    if (line.startsWith(" ") || line.startsWith("\\t")) {
+    if (line.startsWith(" ") || line.startsWith("\t")) {
       const prev = lines[lines.length - 1] || "";
       lines[lines.length - 1] = prev + line.trim();
     } else {
@@ -257,6 +257,58 @@ function parseIcsEvents(text: string): IcsEvent[] {
     } else if (prop === "DURATION") {
       currentDurationMs = parseIcsDuration(value);
     }
+  }
+
+  return events;
+}
+
+function parseIcsEventsFallback(text: string): IcsEvent[] {
+  const unfolded = text.replace(/\r/g, "").replace(/\n[ \t]/g, "");
+  const blocks = unfolded.split(/BEGIN:VEVENT/i).slice(1);
+  const events: IcsEvent[] = [];
+
+  const extractProp = (body: string, prop: string) => {
+    const regex = new RegExp(`^${prop}[^:]*:(.*)$`, "im");
+    const match = body.match(regex);
+    return match ? match[1].trim() : "";
+  };
+
+  for (const block of blocks) {
+    const endIdx = block.search(/END:VEVENT/i);
+    if (endIdx === -1) continue;
+    const body = block.slice(0, endIdx);
+
+    const summary = extractProp(body, "SUMMARY");
+    const location = extractProp(body, "LOCATION");
+    const dtstart = extractProp(body, "DTSTART");
+    const dtend = extractProp(body, "DTEND");
+    const duration = extractProp(body, "DURATION");
+
+    if (!dtstart) continue;
+    const isDateOnly = dtstart.length === 8;
+    const start = parseIcsDate(dtstart, isDateOnly);
+    if (Number.isNaN(start.getTime())) continue;
+
+    let end: Date | null = null;
+    if (dtend) {
+      end = parseIcsDate(dtend, dtend.length === 8);
+    } else if (duration) {
+      const durationMs = parseIcsDuration(duration);
+      if (durationMs) {
+        end = new Date(start.getTime() + durationMs);
+      }
+    }
+
+    if (!end || Number.isNaN(end.getTime())) continue;
+    if (end.getTime() <= start.getTime()) continue;
+
+    events.push({
+      summary: summary || "RDV",
+      location: location || "",
+      start,
+      end,
+      isAllDay: isDateOnly,
+    });
   }
 
   return events;
@@ -794,16 +846,19 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
       }
       const text = await res.text();
 
-      const hasEvents = /BEGIN:VEVENT/i.test(text);
-      const hasFreeBusy = /BEGIN:VFREEBUSY/i.test(text);
-      if (!hasEvents && !hasFreeBusy) {
+      const rawEventCount = (text.match(/BEGIN:VEVENT/gi) || []).length;
+      const rawFreeBusyCount = (text.match(/BEGIN:VFREEBUSY/gi) || []).length;
+      if (rawEventCount === 0 && rawFreeBusyCount === 0) {
         throw new Error("Calendrier ICS invalide ou vide.");
       }
-      const icsEvents = parseIcsEvents(text);
+      let icsEvents = parseIcsEvents(text);
+      if (icsEvents.length === 0 && (rawEventCount > 0 || rawFreeBusyCount > 0)) {
+        icsEvents = parseIcsEventsFallback(text);
+      }
       const isEmptyCalendar = icsEvents.length === 0;
       if (isEmptyCalendar) {
         setStatus(
-          "Calendrier charge: 0 RDV (agenda vide ou partage limite)."
+          `Calendrier charge: 0 RDV (flux: ${rawEventCount} VEVENT / ${rawFreeBusyCount} VFREEBUSY).`
         );
       } else {
         setStatus(`Calendrier charge: ${icsEvents.length} RDV.`);
