@@ -57,6 +57,7 @@ type FormState = {
   avgSpeedKmh: string;
   searchDays: string;
   includeWeekends: boolean;
+  optimizeMode: "travel" | "earliest";
   autoCreate: boolean;
 };
 
@@ -326,6 +327,7 @@ export default function Home() {
     avgSpeedKmh: "60",
     searchDays: String(DEFAULT_SEARCH_DAYS),
     includeWeekends: false,
+    optimizeMode: "travel",
     autoCreate: true,
   });
 
@@ -702,7 +704,9 @@ export default function Home() {
         ? searchDaysRaw
         : DEFAULT_SEARCH_DAYS;
     const windowLabel = form.includeWeekends ? "jours" : "jours ouvres";
-    setStatus(`Analyse des ${searchDays} prochains ${windowLabel}...`);
+    const modeLabel =
+      form.optimizeMode === "travel" ? "trajets optimises" : "plus tot possible";
+    setStatus(`Analyse des ${searchDays} prochains ${windowLabel} (${modeLabel})...`);
 
     try {
       const token = await getAccessToken();
@@ -758,13 +762,29 @@ export default function Home() {
         ).length;
         const travelCost = best.travelFromPrev + best.travelToNext;
 
-        if (
-          !chosen ||
-          best.start < chosen.slot.start ||
-          (best.start.getTime() === chosen.slot.start.getTime() &&
-            travelCost < chosen.cost)
-        ) {
-          chosen = { slot: best, missingLocations, cost: travelCost };
+        const candidate = { slot: best, missingLocations, cost: travelCost };
+
+        if (!chosen) {
+          chosen = candidate;
+          continue;
+        }
+
+        if (form.optimizeMode === "earliest") {
+          if (
+            candidate.slot.start < chosen.slot.start ||
+            (candidate.slot.start.getTime() === chosen.slot.start.getTime() &&
+              candidate.cost < chosen.cost)
+          ) {
+            chosen = candidate;
+          }
+        } else {
+          if (
+            candidate.cost < chosen.cost ||
+            (candidate.cost === chosen.cost &&
+              candidate.slot.start < chosen.slot.start)
+          ) {
+            chosen = candidate;
+          }
         }
       }
 
@@ -893,6 +913,21 @@ export default function Home() {
                 <option value="demo">Demo</option>
                 <option value="training">Training</option>
                 <option value="reseller">Reseller</option>
+              </select>
+            </div>
+            <div className="field">
+              <label>Priorite</label>
+              <select
+                value={form.optimizeMode}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    optimizeMode: e.target.value as FormState["optimizeMode"],
+                  })
+                }
+              >
+                <option value="travel">Optimiser les trajets</option>
+                <option value="earliest">Le plus tot possible</option>
               </select>
             </div>
             <div className="field">
