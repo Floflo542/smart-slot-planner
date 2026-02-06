@@ -16,29 +16,45 @@ const DEFAULT_BUFFER_MIN = 10;
 const DEFAULT_AVG_SPEED_KMH = 60;
 const DEFAULT_SEARCH_DAYS = 10;
 
+function normalizeLocationKey(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 const LOCATION_OVERRIDES: Record<string, string> = {
-  "dépôt speed pro michael mainville":
+  "depot speed pro michael mainville":
     "Grand'Route 202, 4347 Fexhe-le-Haut-Clocher, Belgique",
 };
 const SUMMARY_LOCATION_OVERRIDES: Record<string, string> = {
-  "dépôt speed pro michael mainville":
+  "depot speed pro michael mainville":
     "Grand'Route 202, 4347 Fexhe-le-Haut-Clocher, Belgique",
 };
-
-function normalizeLocationKey(value: string) {
-  return value.trim().toLowerCase();
-}
 
 function resolveEventLocationLabel(event: IcsEvent) {
   const locationRaw = event.location?.trim() || "";
   const summaryRaw = event.summary?.trim() || "";
-  const summaryOverride =
-    SUMMARY_LOCATION_OVERRIDES[normalizeLocationKey(summaryRaw)] || "";
+  const summaryKey = normalizeLocationKey(summaryRaw);
+  let summaryOverride = SUMMARY_LOCATION_OVERRIDES[summaryKey] || "";
+  if (!summaryOverride) {
+    for (const key of Object.keys(SUMMARY_LOCATION_OVERRIDES)) {
+      if (summaryKey.includes(key)) {
+        summaryOverride = SUMMARY_LOCATION_OVERRIDES[key];
+        break;
+      }
+    }
+  }
   const base = locationRaw || summaryOverride;
   if (!base) return "";
   return LOCATION_OVERRIDES[normalizeLocationKey(base)] || base;
 }
-const MAX_GEOCODE_LOCATIONS = 25;
+
+const MAX_GEOCODE_LOCATIONS = Number.POSITIVE_INFINITY;
 const COMMERCIALS = [
   {
     name: "Florian Monoyer",
