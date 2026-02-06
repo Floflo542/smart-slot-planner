@@ -635,6 +635,7 @@ export default function Home() {
         return;
       }
 
+      setStatus("Chargement du calendrier ICS...");
       const res = await fetch(
         `/api/ics?url=${encodeURIComponent(commercialIcsUrl)}`
       );

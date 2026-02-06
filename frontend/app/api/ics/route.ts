@@ -23,12 +23,27 @@ export async function GET(req: Request) {
     );
   }
 
-  const upstream = await fetch(url, {
-    headers: {
-      "User-Agent": USER_AGENT,
-      Accept: "text/calendar,text/plain",
-    },
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
+
+  let upstream: Response;
+  try {
+    upstream = await fetch(url, {
+      headers: {
+        "User-Agent": USER_AGENT,
+        Accept: "text/calendar,text/plain",
+      },
+      cache: "no-store",
+      signal: controller.signal,
+    });
+  } catch {
+    return NextResponse.json(
+      { ok: false, error: "Timeout ou erreur lors du chargement ICS" },
+      { status: 504 }
+    );
+  } finally {
+    clearTimeout(timeout);
+  }
 
   if (!upstream.ok) {
     return NextResponse.json(
