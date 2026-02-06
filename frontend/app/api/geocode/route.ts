@@ -29,7 +29,7 @@ export async function GET(req: Request) {
     q
   )}.json?access_token=${encodeURIComponent(
     MAPBOX_TOKEN
-  )}&limit=1&country=be&language=fr&types=address,place,postcode,street`;
+  )}&limit=1&country=be&language=fr&types=address,place,postcode,locality`;
 
   const upstream = await fetch(url, {
     headers: {
@@ -37,19 +37,23 @@ export async function GET(req: Request) {
     },
   });
 
-  if (!upstream.ok) {
-    return NextResponse.json(
-      { ok: false, error: `Mapbox indisponible (${upstream.status})` },
-      { status: 502 }
-    );
-  }
-
   const json = (await upstream.json()) as {
     features?: Array<{
       center: [number, number];
       place_name: string;
     }>;
+    message?: string;
   };
+
+  if (!upstream.ok) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: `Mapbox indisponible (${upstream.status})${json?.message ? `: ${json.message}` : ""}`,
+      },
+      { status: 502 }
+    );
+  }
 
   if (!json.features || json.features.length === 0) {
     return NextResponse.json(
