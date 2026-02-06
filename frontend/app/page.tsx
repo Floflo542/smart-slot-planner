@@ -924,7 +924,7 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
       const now = new Date();
       const candidates = buildDateCandidates(searchDays, form.includeWeekends);
 
-      const candidates: SlotOption[] = [];
+      const slotCandidates: SlotOption[] = [];
 
       for (const day of candidates) {
         const dateStr = localDateString(day);
@@ -967,7 +967,7 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
         ).length;
         const travelCost = best.travelFromPrev + best.travelToNext;
 
-        candidates.push({
+        slotCandidates.push({
           slot: best,
           missingLocations,
           cost: travelCost,
@@ -975,14 +975,14 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
         });
       }
 
-      if (candidates.length === 0) {
+      if (slotCandidates.length === 0) {
         setStatus(
           `Aucun creneau disponible sur les ${searchDays} prochains ${windowLabel}.`
         );
         return;
       }
 
-      const sorted = [...candidates].sort((a, b) => {
+      const sorted = [...slotCandidates].sort((a, b) => {
         const aHasEvents = a.dayEvents > 0;
         const bHasEvents = b.dayEvents > 0;
         if (aHasEvents !== bHasEvents) {
