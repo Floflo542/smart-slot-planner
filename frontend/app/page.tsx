@@ -479,7 +479,6 @@ export default function Home() {
   const [status, setStatus] = useState("Prêt.");
   const [result, setResult] = useState<BestSlot | null>(null);
   const [icsPayload, setIcsPayload] = useState<IcsPayload | null>(null);
-  const [icsFile, setIcsFile] = useState<File | null>(null);
 
   const [form, setForm] = useState<FormState>({
     commercial: "Florian Monoyer",
@@ -731,7 +730,7 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
       form.optimizeMode === "travel" ? "trajets optimises" : "plus tot possible";
     setStatus(`Analyse des ${searchDays} prochains ${windowLabel} (${modeLabel})...`);
 
-    if (!icsFile && !commercialIcsUrl.trim()) {
+    if (!commercialIcsUrl.trim()) {
       setStatus("Aucun calendrier disponible pour ce commercial.");
       return;
     }
@@ -760,20 +759,14 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
         return;
       }
 
-      let text = "";
-      if (icsFile) {
-        setStatus("Lecture du fichier ICS...");
-        text = await icsFile.text();
-      } else {
-        setStatus("Chargement du calendrier ICS...");
-        const res = await fetch(
-          `/api/ics?url=${encodeURIComponent(commercialIcsUrl)}`
-        );
-        if (!res.ok) {
-          throw new Error("Impossible de charger le lien ICS.");
-        }
-        text = await res.text();
+      setStatus("Chargement du calendrier ICS...");
+      const res = await fetch(
+        `/api/ics?url=${encodeURIComponent(commercialIcsUrl)}`
+      );
+      if (!res.ok) {
+        throw new Error("Impossible de charger le lien ICS.");
       }
+      const text = await res.text();
 
       const hasEvents = text.includes("BEGIN:VEVENT");
       const hasFreeBusy = text.includes("BEGIN:VFREEBUSY");
@@ -873,7 +866,7 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
 
       const notes: string[] = [...chosen.slot.notes];
       notes.push(
-        icsFile ? "Source calendrier: fichier ICS." : "Source calendrier: lien ICS."
+        "Source calendrier: lien ICS."
       );
       if (homeNote) {
         notes.push(homeNote);
@@ -950,21 +943,9 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
               ))}
             </select>
           </div>
-          <div className="field">
-            <label>Importer un fichier .ics (optionnel)</label>
-            <input
-              type="file"
-              accept=".ics,text/calendar"
-              onChange={(e) => setIcsFile(e.target.files?.[0] || null)}
-            />
-            {icsFile ? (
-              <div className="small">Fichier charge: {icsFile.name}</div>
-            ) : null}
-          </div>
         </div>
         <p className="small" style={{ marginTop: 10 }}>
           Le calendrier ICS est relie automatiquement au commercial selectionne.
-          Si un fichier est importe, il est utilise a la place du lien.
         </p>
       </section>
 
