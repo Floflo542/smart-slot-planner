@@ -13,6 +13,7 @@ const DEFAULT_HOME_COORDS = { lat: 50.695, lon: 4.04 };
 const DEFAULT_DAY_START = "07:30";
 const DEFAULT_DAY_END = "16:30";
 const DEFAULT_BUFFER_MIN = 10;
+const DEFAULT_AVG_SPEED_KMH = 60;
 const DEFAULT_SEARCH_DAYS = 10;
 const MAX_GEOCODE_LOCATIONS = 25;
 const COMMERCIALS = [
@@ -67,12 +68,10 @@ type IcsEvent = {
 
 type FormState = {
   commercial: Commercial;
-  homeAddress: string;
   appointmentAddress: string;
   appointmentTitle: string;
   type: VisitType;
   durationMin: string;
-  avgSpeedKmh: string;
   searchDays: string;
   includeWeekends: boolean;
   optimizeMode: "travel" | "earliest";
@@ -128,6 +127,20 @@ function parseIcsDate(value: string, isDateOnly: boolean) {
   return new Date(year, month, day, hour, min, sec);
 }
 
+function parseIcsDuration(value: string) {
+  const match = value.match(
+    /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/
+  );
+  if (!match) return null;
+  const days = Number.parseInt(match[1] || "0", 10);
+  const hours = Number.parseInt(match[2] || "0", 10);
+  const minutes = Number.parseInt(match[3] || "0", 10);
+  const seconds = Number.parseInt(match[4] || "0", 10);
+  const totalMs =
+    (((days * 24 + hours) * 60 + minutes) * 60 + seconds) * 1000;
+  return Number.isFinite(totalMs) && totalMs > 0 ? totalMs : null;
+}
+
 function parseFreeBusyRanges(value: string): IcsEvent[] {
   const out: IcsEvent[] = [];
   const ranges = value.split(",");
@@ -136,7 +149,16 @@ function parseFreeBusyRanges(value: string): IcsEvent[] {
     if (!startRaw || !endRaw) continue;
     const isDateOnly = startRaw.length === 8 && endRaw.length === 8;
     const start = parseIcsDate(startRaw, isDateOnly);
-    const end = parseIcsDate(endRaw, isDateOnly);
+    let end: Date | null = null;
+    if (endRaw.startsWith("P")) {
+      const durationMs = parseIcsDuration(endRaw);
+      if (durationMs) {
+        end = new Date(start.getTime() + durationMs);
+      }
+    } else {
+      end = parseIcsDate(endRaw, isDateOnly);
+    }
+    if (!end) continue;
     if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) continue;
     if (end.getTime() <= start.getTime()) continue;
     out.push({
@@ -168,11 +190,13 @@ function parseIcsEvents(text: string): IcsEvent[] {
   let current: Partial<IcsEvent> | null = null;
   let currentAllDay = false;
   let inFreeBusy = false;
+  let currentDurationMs: number | null = null;
 
   for (const line of lines) {
     if (line === "BEGIN:VEVENT") {
       current = {};
       currentAllDay = false;
+      currentDurationMs = null;
       inFreeBusy = false;
       continue;
     }
@@ -182,6 +206,9 @@ function parseIcsEvents(text: string): IcsEvent[] {
       continue;
     }
     if (line === "END:VEVENT") {
+      if (current?.start && !current.end && currentDurationMs) {
+        current.end = new Date(current.start.getTime() + currentDurationMs);
+      }
       if (current?.start && current.end) {
         events.push({
           summary: current.summary || "RDV",
@@ -192,6 +219,7 @@ function parseIcsEvents(text: string): IcsEvent[] {
         });
       }
       current = null;
+      currentDurationMs = null;
       continue;
     }
     if (line === "END:VFREEBUSY") {
@@ -203,7 +231,7 @@ function parseIcsEvents(text: string): IcsEvent[] {
     const [prop, ...paramParts] = left.split(";");
     const params = paramParts.join(";").toUpperCase();
 
-    if (inFreeBusy && prop === "FREEBUSY") {
+    if (prop === "FREEBUSY") {
       events.push(...parseFreeBusyRanges(value));
       continue;
     }
@@ -221,6 +249,8 @@ function parseIcsEvents(text: string): IcsEvent[] {
     } else if (prop === "DTEND") {
       const isDateOnly = params.includes("VALUE=DATE") || value.length === 8;
       current.end = parseIcsDate(value, isDateOnly);
+    } else if (prop === "DURATION") {
+      currentDurationMs = parseIcsDuration(value);
     }
   }
 
@@ -399,7 +429,6 @@ async function findBestSlot(params: {
   appointment: GeoPoint;
   durationMin: number;
   bufferMin: number;
-  avgSpeedKmh: number;
   fixed: FixedEvent[];
   travelMinutesFn: (
     a: GeoPoint | null,
@@ -482,12 +511,10 @@ export default function Home() {
 
   const [form, setForm] = useState<FormState>({
     commercial: "Florian Monoyer",
-    homeAddress: DEFAULT_HOME_ADDRESS,
     appointmentAddress: "",
     appointmentTitle: "",
     type: "demo",
     durationMin: "",
-    avgSpeedKmh: "60",
     searchDays: String(DEFAULT_SEARCH_DAYS),
     includeWeekends: false,
     optimizeMode: "travel",
@@ -532,7 +559,7 @@ export default function Home() {
       // ignore and fallback below
     }
 
-    const fallback = travelMinutes(a, b, Number(form.avgSpeedKmh) || 60);
+    const fallback = travelMinutes(a, b, DEFAULT_AVG_SPEED_KMH);
     routeCache.current.set(key, fallback);
     return fallback;
   };
@@ -699,11 +726,6 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
     setResult(null);
     setIcsPayload(null);
 
-    if (!form.homeAddress.trim()) {
-      setStatus("Adresse de départ manquante.");
-      return;
-    }
-
     if (!form.appointmentAddress.trim()) {
       setStatus("Adresse du RDV manquante.");
       return;
@@ -719,7 +741,6 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
     }
 
     const bufferMin = DEFAULT_BUFFER_MIN;
-    const avgSpeedKmh = Number.parseFloat(form.avgSpeedKmh) || 60;
     const searchDaysRaw = Number.parseInt(form.searchDays, 10);
     const searchDays =
       Number.isFinite(searchDaysRaw) && searchDaysRaw > 0
@@ -774,10 +795,14 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
         throw new Error("Calendrier ICS invalide ou vide.");
       }
       const icsEvents = parseIcsEvents(text);
-      if (icsEvents.length === 0) {
-        throw new Error("Aucun RDV detecte dans le calendrier ICS.");
+      const isEmptyCalendar = icsEvents.length === 0;
+      if (isEmptyCalendar) {
+        setStatus(
+          "Calendrier charge: 0 RDV (agenda vide ou partage limite)."
+        );
+      } else {
+        setStatus(`Calendrier charge: ${icsEvents.length} RDV.`);
       }
-      setStatus(`Calendrier charge: ${icsEvents.length} RDV.`);
       const { locationMap, skipped } = await preloadIcsLocations(icsEvents);
 
       const now = new Date();
@@ -816,7 +841,6 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
           appointment,
           durationMin,
           bufferMin,
-          avgSpeedKmh,
           fixed,
           travelMinutesFn: travelMinutesWithTraffic,
         });
@@ -868,6 +892,11 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
       notes.push(
         "Source calendrier: lien ICS."
       );
+      if (isEmptyCalendar) {
+        notes.push(
+          "Aucun RDV detecte dans le calendrier ICS (planning base sur un agenda vide)."
+        );
+      }
       if (homeNote) {
         notes.push(homeNote);
       }
@@ -1018,15 +1047,6 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
                 onChange={(e) =>
                   setForm({ ...form, appointmentTitle: e.target.value })
                 }
-              />
-            </div>
-            <div className="field">
-              <label>Vitesse moyenne (km/h)</label>
-              <input
-                type="number"
-                min={5}
-                value={form.avgSpeedKmh}
-                onChange={(e) => setForm({ ...form, avgSpeedKmh: e.target.value })}
               />
             </div>
             <div className="field">
