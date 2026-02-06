@@ -193,19 +193,20 @@ function parseIcsEvents(text: string): IcsEvent[] {
   let currentDurationMs: number | null = null;
 
   for (const line of lines) {
-    if (line === "BEGIN:VEVENT") {
+    const upper = line.toUpperCase();
+    if (upper === "BEGIN:VEVENT") {
       current = {};
       currentAllDay = false;
       currentDurationMs = null;
       inFreeBusy = false;
       continue;
     }
-    if (line === "BEGIN:VFREEBUSY") {
+    if (upper === "BEGIN:VFREEBUSY") {
       current = null;
       inFreeBusy = true;
       continue;
     }
-    if (line === "END:VEVENT") {
+    if (upper === "END:VEVENT") {
       if (current?.start && !current.end && currentDurationMs) {
         current.end = new Date(current.start.getTime() + currentDurationMs);
       }
@@ -222,13 +223,17 @@ function parseIcsEvents(text: string): IcsEvent[] {
       currentDurationMs = null;
       continue;
     }
-    if (line === "END:VFREEBUSY") {
+    if (upper === "END:VFREEBUSY") {
       inFreeBusy = false;
       continue;
     }
 
-    const [left, value = ""] = line.split(":");
-    const [prop, ...paramParts] = left.split(";");
+    const colonIndex = line.indexOf(":");
+    if (colonIndex === -1) continue;
+    const left = line.slice(0, colonIndex);
+    const value = line.slice(colonIndex + 1);
+    const [rawProp, ...paramParts] = left.split(";");
+    const prop = rawProp.toUpperCase();
     const params = paramParts.join(";").toUpperCase();
 
     if (prop === "FREEBUSY") {
@@ -789,8 +794,8 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
       }
       const text = await res.text();
 
-      const hasEvents = text.includes("BEGIN:VEVENT");
-      const hasFreeBusy = text.includes("BEGIN:VFREEBUSY");
+      const hasEvents = /BEGIN:VEVENT/i.test(text);
+      const hasFreeBusy = /BEGIN:VFREEBUSY/i.test(text);
       if (!hasEvents && !hasFreeBusy) {
         throw new Error("Calendrier ICS invalide ou vide.");
       }
