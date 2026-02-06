@@ -91,6 +91,13 @@ type BestSlot = {
   notes: string[];
 };
 
+type SlotOption = {
+  slot: BestSlot;
+  missingLocations: number;
+  dayEvents: number;
+  cost: number;
+};
+
 type IcsPayload = {
   summary: string;
   location: string;
@@ -602,8 +609,7 @@ async function findBestSlot(params: {
 
 export default function Home() {
   const [status, setStatus] = useState("Prêt.");
-  const [result, setResult] = useState<BestSlot | null>(null);
-  const [icsPayload, setIcsPayload] = useState<IcsPayload | null>(null);
+  const [options, setOptions] = useState<SlotOption[]>([]);
 
   const [form, setForm] = useState<FormState>({
     commercial: "Florian Monoyer",
@@ -625,6 +631,18 @@ export default function Home() {
   );
   const commercialIcsUrl =
     COMMERCIALS.find((item) => item.name === form.commercial)?.icsUrl || "";
+
+  const buildIcsPayload = (slot: BestSlot): IcsPayload => {
+    const subject =
+      form.appointmentTitle.trim() ||
+      `${form.type.toUpperCase()} — ${form.appointmentAddress.trim()}`;
+    const description = `Commercial: ${form.commercial}\nType: ${form.type}\nAdresse: ${form.appointmentAddress.trim()}\nTrajet estime: ${slot.travelFromPrev} min (aller) / ${slot.travelToNext} min (retour).`;
+    return {
+      summary: subject,
+      location: form.appointmentAddress.trim(),
+      description,
+    };
+  };
 
   const travelMinutesWithTraffic = async (
     a: GeoPoint | null,
@@ -819,8 +837,7 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setStatus("Analyse du meilleur créneau...");
-    setResult(null);
-    setIcsPayload(null);
+    setOptions([]);
 
     if (!form.appointmentAddress.trim()) {
       setStatus("Adresse du RDV manquante.");
@@ -907,10 +924,7 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
       const now = new Date();
       const candidates = buildDateCandidates(searchDays, form.includeWeekends);
 
-      let chosen:
-        | { slot: BestSlot; missingLocations: number; cost: number }
-        | null = null;
-      let chosenDayEvents = 0;
+      const candidates: SlotOption[] = [];
 
       for (const day of candidates) {
         const dateStr = localDateString(day);
@@ -953,100 +967,69 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
         ).length;
         const travelCost = best.travelFromPrev + best.travelToNext;
 
-        const candidate = {
+        candidates.push({
           slot: best,
           missingLocations,
           cost: travelCost,
           dayEvents: dayEvents.length,
-        };
-
-        if (!chosen) {
-          chosen = candidate;
-          chosenDayEvents = candidate.dayEvents;
-          continue;
-        }
-
-        if (candidate.dayEvents > 0 && chosenDayEvents === 0) {
-          chosen = candidate;
-          chosenDayEvents = candidate.dayEvents;
-          continue;
-        }
-        if (candidate.dayEvents === 0 && chosenDayEvents > 0) {
-          continue;
-        }
-
-        if (form.optimizeMode === "earliest") {
-          if (
-            candidate.slot.start < chosen.slot.start ||
-            (candidate.slot.start.getTime() === chosen.slot.start.getTime() &&
-              candidate.cost < chosen.cost)
-          ) {
-            chosen = candidate;
-            chosenDayEvents = candidate.dayEvents;
-          }
-        } else {
-          if (
-            candidate.cost < chosen.cost ||
-            (candidate.cost === chosen.cost &&
-              candidate.slot.start < chosen.slot.start)
-          ) {
-            chosen = candidate;
-            chosenDayEvents = candidate.dayEvents;
-          }
-        }
+        });
       }
 
-      if (!chosen) {
+      if (candidates.length === 0) {
         setStatus(
           `Aucun creneau disponible sur les ${searchDays} prochains ${windowLabel}.`
         );
         return;
       }
 
-      const notes: string[] = [...chosen.slot.notes];
-      notes.push(
-        "Source calendrier: lien ICS."
-      );
-      if (isEmptyCalendar) {
-        notes.push(
-          "Aucun RDV detecte dans le calendrier ICS (planning base sur un agenda vide)."
-        );
-      }
-      if (homeNote) {
-        notes.push(homeNote);
-      }
-      if (chosen.missingLocations > 0) {
-        notes.push(
-          `${chosen.missingLocations} RDV calendrier sans geocodage: trajets estimes a 0 min.`
-        );
-      }
-      notes.push(`RDV detectes ce jour: ${chosenDayEvents}.`);
-      if (skipped > 0) {
-        notes.push(
-          `${skipped} adresses ignorees pour accelerer l'optimisation.`
-        );
-      }
-
-      const enrichedBest: BestSlot = { ...chosen.slot, notes };
-      setResult(enrichedBest);
-
-      const subject =
-        form.appointmentTitle.trim() ||
-        `${form.type.toUpperCase()} — ${form.appointmentAddress.trim()}`;
-      const description = `Commercial: ${form.commercial}\nType: ${form.type}\nAdresse: ${form.appointmentAddress.trim()}\nTrajet estime: ${enrichedBest.travelFromPrev} min (aller) / ${enrichedBest.travelToNext} min (retour).`;
-      setIcsPayload({
-        summary: subject,
-        location: form.appointmentAddress.trim(),
-        description,
+      const sorted = [...candidates].sort((a, b) => {
+        const aHasEvents = a.dayEvents > 0;
+        const bHasEvents = b.dayEvents > 0;
+        if (aHasEvents !== bHasEvents) {
+          return aHasEvents ? -1 : 1;
+        }
+        if (form.optimizeMode === "earliest") {
+          const diff = a.slot.start.getTime() - b.slot.start.getTime();
+          if (diff !== 0) return diff;
+          return a.cost - b.cost;
+        }
+        if (a.cost !== b.cost) return a.cost - b.cost;
+        return a.slot.start.getTime() - b.slot.start.getTime();
       });
 
-      setStatus(
-        `Creneau recommande le ${formatDateLabel(
-          enrichedBest.start
-        )} : ${formatHHMM(enrichedBest.start)} - ${formatHHMM(
-          enrichedBest.end
-        )}`
-      );
+      const buildNotes = (candidate: SlotOption) => {
+        const notes: string[] = [];
+        notes.push("Source calendrier: lien ICS.");
+        if (isEmptyCalendar) {
+          notes.push(
+            "Aucun RDV detecte dans le calendrier ICS (planning base sur un agenda vide)."
+          );
+        }
+        if (homeNote) {
+          notes.push(homeNote);
+        }
+        if (candidate.missingLocations > 0) {
+          notes.push(
+            `${candidate.missingLocations} RDV calendrier sans geocodage: trajets estimes a 0 min.`
+          );
+        }
+        notes.push(`RDV detectes ce jour: ${candidate.dayEvents}.`);
+        if (skipped > 0) {
+          notes.push(
+            `${skipped} adresses ignorees pour accelerer l'optimisation.`
+          );
+        }
+        return notes;
+      };
+
+      const top = sorted.slice(0, 3).map((candidate) => ({
+        ...candidate,
+        slot: { ...candidate.slot, notes: buildNotes(candidate) },
+      }));
+
+      setOptions(top);
+      const label = top.length === 1 ? "1 creneau propose." : `${top.length} creneaux proposes.`;
+      setStatus(label);
     } catch (err: any) {
       setStatus(`Erreur: ${err?.message || String(err)}`);
     }
@@ -1195,15 +1178,6 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
             <button className="btn primary" type="submit">
               Trouver le meilleur créneau
             </button>
-            {result && icsPayload ? (
-              <button
-                className="btn ghost"
-                type="button"
-                onClick={() => downloadIcsFile(result, icsPayload)}
-              >
-                Telecharger le fichier .ics
-              </button>
-            ) : null}
           </div>
         </form>
       </section>
@@ -1213,40 +1187,57 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
         <div className="status">{status}</div>
       </section>
 
-      {result ? (
+      {options.length ? (
         <section className="card">
-          <div className="card-title">Créneau recommandé</div>
-          <div className="result-grid">
-            <div className="result-card">
-              <div className="small">Date recommandee</div>
-              <div style={{ fontSize: 20, fontWeight: 700 }}>
-                {formatDateLabel(result.start)}
+          <div className="card-title">Créneaux proposés</div>
+          {options.map((option, idx) => {
+            const slot = option.slot;
+            return (
+              <div key={`${slot.start.toISOString()}-${idx}`} style={{ marginTop: 16 }}>
+                <div className="small">Option {idx + 1}</div>
+                <div className="result-grid">
+                  <div className="result-card">
+                    <div className="small">Date recommandee</div>
+                    <div style={{ fontSize: 20, fontWeight: 700 }}>
+                      {formatDateLabel(slot.start)}
+                    </div>
+                    <div className="small" style={{ marginTop: 6 }}>
+                      Heure proposee
+                    </div>
+                    <div style={{ fontSize: 22, fontWeight: 700 }}>
+                      {formatHHMM(slot.start)} - {formatHHMM(slot.end)}
+                    </div>
+                    <div className="small">Fuseau: {timezone}</div>
+                  </div>
+                  <div className="result-card">
+                    <div className="small">Trajet estimé</div>
+                    <div style={{ fontSize: 20, fontWeight: 600 }}>
+                      {slot.travelFromPrev} min depuis {slot.prevLabel || "départ"}
+                    </div>
+                    <div className="small">
+                      {slot.travelToNext} min vers {slot.nextLabel || "fin"}
+                    </div>
+                  </div>
+                </div>
+                <div className="row" style={{ marginTop: 10 }}>
+                  <button
+                    className="btn ghost"
+                    type="button"
+                    onClick={() => downloadIcsFile(slot, buildIcsPayload(slot))}
+                  >
+                    Telecharger le fichier .ics
+                  </button>
+                </div>
+                {slot.notes.length ? (
+                  <ul className="note-list">
+                    {slot.notes.map((note, noteIdx) => (
+                      <li key={noteIdx}>{note}</li>
+                    ))}
+                  </ul>
+                ) : null}
               </div>
-              <div className="small" style={{ marginTop: 6 }}>
-                Heure proposee
-              </div>
-              <div style={{ fontSize: 22, fontWeight: 700 }}>
-                {formatHHMM(result.start)} - {formatHHMM(result.end)}
-              </div>
-              <div className="small">Fuseau: {timezone}</div>
-            </div>
-            <div className="result-card">
-              <div className="small">Trajet estimé</div>
-              <div style={{ fontSize: 20, fontWeight: 600 }}>
-                {result.travelFromPrev} min depuis {result.prevLabel || "départ"}
-              </div>
-              <div className="small">
-                {result.travelToNext} min vers {result.nextLabel || "fin"}
-              </div>
-            </div>
-          </div>
-          {result.notes.length ? (
-            <ul className="note-list">
-              {result.notes.map((note, idx) => (
-                <li key={idx}>{note}</li>
-              ))}
-            </ul>
-          ) : null}
+            );
+          })}
         </section>
       ) : null}
     </main>
