@@ -8,7 +8,7 @@ const DURATION_MIN = {
   reseller: 60,
 } as const;
 
-const DEFAULT_HOME_ADDRESS = "Rue du Tram, 7850 Enghien, Belgique";
+const DEFAULT_HOME_ADDRESS = "Rue du Viaduc 83, 7850 Enghien, Belgique";
 const DEFAULT_HOME_COORDS = { lat: 50.695, lon: 4.04 };
 const DEFAULT_DAY_START = "07:30";
 const DEFAULT_DAY_END = "16:30";
