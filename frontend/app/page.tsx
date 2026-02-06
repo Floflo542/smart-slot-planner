@@ -8,7 +8,7 @@ const DURATION_MIN = {
   reseller: 60,
 } as const;
 
-const DEFAULT_HOME_ADDRESS = "Rue du Tram 7850 Enghien";
+const DEFAULT_HOME_ADDRESS = "Rue du Tram, 7850 Enghien, Belgique";
 const DEFAULT_DAY_START = "07:30";
 const DEFAULT_DAY_END = "16:30";
 const DEFAULT_BUFFER_MIN = 10;
@@ -447,28 +447,68 @@ export default function Home() {
     COMMERCIALS.find((item) => item.name === form.commercial)?.icsUrl || "";
 
   async function geocodeAddress(label: string): Promise<GeoPoint> {
-    const cached = geocodeCache.current.get(label);
+    const trimmed = label.trim();
+    const cached = geocodeCache.current.get(trimmed);
     if (cached) return cached;
     if (cached === null) {
       throw new Error("Adresse introuvable");
     }
 
-    const res = await fetch(`/api/geocode?q=${encodeURIComponent(label)}`);
-    const json = await res.json();
-
-    if (!res.ok || !json?.ok) {
-      geocodeCache.current.set(label, null);
-      throw new Error(json?.error || "Adresse introuvable");
-    }
-
-    const point: GeoPoint = {
-      label: json.label || label,
-      lat: json.lat,
-      lon: json.lon,
+    const attempts = new Set<string>();
+    const addAttempt = (value: string) => {
+      const candidate = value.trim();
+      if (candidate) attempts.add(candidate);
     };
 
-    geocodeCache.current.set(label, point);
-    return point;
+    addAttempt(trimmed);
+
+    const withCommaPostal = trimmed.replace(
+      /(\S)\s+(\d{4})\s+/,
+      "$1, $2 "
+    );
+    addAttempt(withCommaPostal);
+
+    const hasCountry = /belgique|belgium/i.test(trimmed);
+    if (!hasCountry) {
+      addAttempt(`${withCommaPostal}, Belgique`);
+      addAttempt(`${trimmed}, Belgique`);
+    }
+
+    const postalMatch = trimmed.match(/(\d{4})\s+([A-Za-zÀ-ÿ'\\- ]+)/);
+    if (postalMatch) {
+      addAttempt(`${postalMatch[1]} ${postalMatch[2]}, Belgique`);
+    }
+
+    for (const query of attempts) {
+      const cachedQuery = geocodeCache.current.get(query);
+      if (cachedQuery) {
+        geocodeCache.current.set(trimmed, cachedQuery);
+        return cachedQuery;
+      }
+      if (cachedQuery === null) {
+        continue;
+      }
+
+      const res = await fetch(`/api/geocode?q=${encodeURIComponent(query)}`);
+      const json = await res.json();
+      if (!res.ok || !json?.ok) {
+        geocodeCache.current.set(query, null);
+        continue;
+      }
+
+      const point: GeoPoint = {
+        label: json.label || query,
+        lat: json.lat,
+        lon: json.lon,
+      };
+
+      geocodeCache.current.set(query, point);
+      geocodeCache.current.set(trimmed, point);
+      return point;
+    }
+
+    geocodeCache.current.set(trimmed, null);
+    throw new Error("Adresse introuvable");
   }
 
   function filterIcsEventsForDay(
