@@ -20,9 +20,23 @@ const LOCATION_OVERRIDES: Record<string, string> = {
   "dépôt speed pro michael mainville":
     "Grand'Route 202, 4347 Fexhe-le-Haut-Clocher, Belgique",
 };
+const SUMMARY_LOCATION_OVERRIDES: Record<string, string> = {
+  "dépôt speed pro michael mainville":
+    "Grand'Route 202, 4347 Fexhe-le-Haut-Clocher, Belgique",
+};
 
 function normalizeLocationKey(value: string) {
   return value.trim().toLowerCase();
+}
+
+function resolveEventLocationLabel(event: IcsEvent) {
+  const locationRaw = event.location?.trim() || "";
+  const summaryRaw = event.summary?.trim() || "";
+  const summaryOverride =
+    SUMMARY_LOCATION_OVERRIDES[normalizeLocationKey(summaryRaw)] || "";
+  const base = locationRaw || summaryOverride;
+  if (!base) return "";
+  return LOCATION_OVERRIDES[normalizeLocationKey(base)] || base;
 }
 const MAX_GEOCODE_LOCATIONS = 25;
 const COMMERCIALS = [
@@ -708,7 +722,7 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
     const unique = Array.from(
       new Set(
         events
-          .map((evt) => evt.location.trim())
+          .map((evt) => resolveEventLocationLabel(evt))
           .filter((loc) => loc && !isOnlineLocation(loc))
       )
     );
@@ -722,9 +736,7 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
       done += 1;
       setStatus(`Geocodage des RDV existants (${done}/${limited.length})...`);
       try {
-        const override = LOCATION_OVERRIDES[normalizeLocationKey(loc)];
-        const query = override || loc;
-        const point = await geocodeAddress(query);
+        const point = await geocodeAddress(loc);
         locationMap.set(loc, point);
       } catch {
         locationMap.set(loc, null);
@@ -770,7 +782,7 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
       if (clampedEnd.getTime() <= clampedStart.getTime()) continue;
 
       let location: GeoPoint | null = null;
-      const locationLabel = evt.location || "";
+      const locationLabel = resolveEventLocationLabel(evt);
       if (locationLabel && !isOnlineLocation(locationLabel)) {
         location = locationMap.get(locationLabel) ?? null;
       }
