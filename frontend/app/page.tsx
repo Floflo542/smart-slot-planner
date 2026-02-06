@@ -728,7 +728,14 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
         throw new Error("Impossible de charger le lien ICS.");
       }
       const text = await res.text();
+      if (!text.includes("BEGIN:VEVENT")) {
+        throw new Error("Calendrier ICS invalide ou inaccessible.");
+      }
       const icsEvents = parseIcsEvents(text);
+      if (icsEvents.length === 0) {
+        throw new Error("Aucun RDV detecte dans le calendrier ICS.");
+      }
+      setStatus(`Calendrier charge: ${icsEvents.length} RDV.`);
       const { locationMap, skipped } = await preloadIcsLocations(icsEvents);
 
       const now = new Date();
@@ -737,6 +744,7 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
       let chosen:
         | { slot: BestSlot; missingLocations: number; cost: number }
         | null = null;
+      let chosenDayEvents = 0;
 
       for (const day of candidates) {
         const dateStr = localDateString(day);
@@ -751,6 +759,7 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
           continue;
         }
 
+        const dayEvents = filterIcsEventsForDay(icsEvents, dayStart, dayEnd);
         const fixed = await buildFixedEventsFromIcs(
           icsEvents,
           dayStart,
@@ -801,6 +810,7 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
               candidate.slot.start < chosen.slot.start)
           ) {
             chosen = candidate;
+            chosenDayEvents = dayEvents.length;
           }
         }
       }
@@ -821,6 +831,7 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
           `${chosen.missingLocations} RDV calendrier sans geocodage: trajets estimes a 0 min.`
         );
       }
+      notes.push(`RDV detectes ce jour: ${chosenDayEvents}.`);
       if (skipped > 0) {
         notes.push(
           `${skipped} adresses ignorees pour accelerer l'optimisation.`
