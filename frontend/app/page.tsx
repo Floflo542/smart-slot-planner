@@ -474,7 +474,7 @@ export default function Home() {
       addAttempt(`${trimmed}, Belgique`);
     }
 
-    const postalMatch = trimmed.match(/(\d{4})\s+([A-Za-zÀ-ÿ'\\- ]+)/);
+    const postalMatch = trimmed.match(/(\d{4})\s+(.+)/);
     if (postalMatch) {
       addAttempt(`${postalMatch[1]} ${postalMatch[2]}, Belgique`);
     }
