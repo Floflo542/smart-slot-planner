@@ -41,7 +41,12 @@ export async function GET(req: Request) {
     });
 
     if (departAt) {
-      params.set("depart_at", departAt);
+      const parsed = new Date(departAt);
+      if (!Number.isNaN(parsed.getTime())) {
+        const safe = parsed.getTime() < Date.now() ? new Date() : parsed;
+        const formatted = safe.toISOString().replace(/\.\d{3}Z$/, "Z");
+        params.set("depart_at", formatted);
+      }
     }
 
     const url = `https://api.mapbox.com/directions/v5/mapbox/driving-traffic/${from.lon},${from.lat};${to.lon},${to.lat}?${params.toString()}`;
