@@ -1005,7 +1005,7 @@ export default function Home() {
   };
 
   const handleLoadCalendar = async () => {
-    await loadCalendarWindow(CALENDAR_RANGE_DAYS, true);
+    await loadCalendarWindow(CALENDAR_RANGE_DAYS, false);
   };
 
   const loadResellers = async (commercial: Commercial) => {
@@ -1225,7 +1225,7 @@ export default function Home() {
   };
 
   const handleAnalyzeReport = async () => {
-    const calendar = await loadCalendarWindow(CALENDAR_RANGE_DAYS, true);
+    const calendar = await loadCalendarWindow(CALENDAR_RANGE_DAYS, false);
     if (!calendar) return;
     const resellersForReport = await loadResellers(form.commercial);
     const items = await buildReportItems(calendar, resellersForReport);
@@ -1859,13 +1859,6 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
           <section className="card">
             <div className="card-title">Nouveau RDV</div>
             <form onSubmit={handleSubmit}>
-              <div className="row" style={{ marginBottom: 12 }}>
-                <span className="badge">
-                  Journee: {DEFAULT_DAY_START} - {DEFAULT_DAY_END}
-                </span>
-                <span className="badge">Buffer: {DEFAULT_BUFFER_MIN} min</span>
-                <span className="badge">Depart: {DEFAULT_HOME_ADDRESS}</span>
-              </div>
               <div className="grid">
                 <div className="field">
                   <label>Type</label>
