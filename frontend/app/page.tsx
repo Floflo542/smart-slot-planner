@@ -60,7 +60,19 @@ function resolveEventLocationLabel(event: IcsEvent) {
       }
     }
   }
-  const base = locationRaw || summaryOverride;
+  const looksLikeAddress = (value: string) => {
+    if (!value) return false;
+    const lower = value.toLowerCase();
+    if (/\b\d{4}\b/.test(lower)) return true;
+    return /(rue|avenue|av\.|chauss[eé]e|boulevard|bd\.?|bld\.?|straat|laan|weg|route|road|place|pl\.?)/i.test(
+      lower
+    );
+  };
+
+  const base =
+    locationRaw ||
+    summaryOverride ||
+    (looksLikeAddress(summaryRaw) ? summaryRaw : "");
   if (!base) return "";
   const normalized = normalizeLocationKey(base);
   return (
