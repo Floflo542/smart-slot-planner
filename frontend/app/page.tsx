@@ -15,6 +15,7 @@ const DEFAULT_DAY_END = "16:30";
 const DEFAULT_BUFFER_MIN = 10;
 const DEFAULT_AVG_SPEED_KMH = 60;
 const DEFAULT_SEARCH_DAYS = 10;
+const TRAFFIC_MARGIN = 1.4;
 
 function normalizeLocationKey(value: string) {
   return value
@@ -670,7 +671,10 @@ export default function Home() {
       );
       const json = await res.json();
       if (res.ok && json?.ok && Number.isFinite(json.duration_min)) {
-        const minutes = Math.max(1, Math.round(json.duration_min));
+        const minutes = Math.max(
+          1,
+          Math.round(json.duration_min * TRAFFIC_MARGIN)
+        );
         routeCache.current.set(key, minutes);
         return minutes;
       }
