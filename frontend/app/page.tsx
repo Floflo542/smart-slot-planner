@@ -15,7 +15,7 @@ const DEFAULT_DAY_END = "16:30";
 const DEFAULT_BUFFER_MIN = 10;
 const DEFAULT_AVG_SPEED_KMH = 60;
 const DEFAULT_SEARCH_DAYS = 10;
-const TRAFFIC_MARGIN = 1.4;
+const TRAFFIC_MARGIN = 1.0;
 
 function normalizeLocationKey(value: string) {
   return value
