@@ -882,6 +882,88 @@ async function findBestSlot(params: {
   return best;
 }
 
+function findBestSlotEstimate(params: {
+  dayStart: Date;
+  dayEnd: Date;
+  home: GeoPoint;
+  appointment: GeoPoint;
+  durationMin: number;
+  bufferMin: number;
+  avgSpeedKmh: number;
+  fixed: FixedEvent[];
+}) {
+  const timeline = [
+    {
+      id: "day-start",
+      label: "Départ",
+      start: params.dayStart,
+      end: params.dayStart,
+      location: params.home,
+    },
+    ...mergeBusyEvents(params.fixed),
+    {
+      id: "day-end",
+      label: "Fin",
+      start: params.dayEnd,
+      end: params.dayEnd,
+      location: params.home,
+    },
+  ];
+
+  const notes: string[] = [];
+  let best: BestSlot | null = null;
+  let bestCost = Number.POSITIVE_INFINITY;
+
+  for (let i = 0; i < timeline.length - 1; i += 1) {
+    const prev = timeline[i];
+    const next = timeline[i + 1];
+
+    const prevBuffer = prev.id === "day-start" ? 0 : params.bufferMin;
+    const nextBuffer = params.bufferMin;
+
+    const departFromPrev = addMinutes(prev.end, prevBuffer);
+    const travelFromPrev = travelMinutes(
+      prev.location ?? null,
+      params.appointment,
+      params.avgSpeedKmh
+    );
+
+    const candidateStart = addMinutes(departFromPrev, travelFromPrev);
+    const candidateEnd = addMinutes(candidateStart, params.durationMin);
+
+    const travelToNext = travelMinutes(
+      params.appointment,
+      next.location ?? null,
+      params.avgSpeedKmh
+    );
+    const arrivesNext = addMinutes(candidateEnd, travelToNext + nextBuffer);
+
+    if (arrivesNext.getTime() > next.start.getTime()) {
+      continue;
+    }
+
+    const cost = travelFromPrev + travelToNext;
+    if (cost < bestCost || (cost === bestCost && (!best || candidateStart < best.start))) {
+      bestCost = cost;
+      const nextLabel =
+        next.id === "day-end"
+          ? next.label
+          : `${next.label} (${formatHHMM(next.start)})`;
+      best = {
+        start: candidateStart,
+        end: candidateEnd,
+        travelFromPrev,
+        travelToNext,
+        prevLabel: prev.label,
+        nextLabel,
+        notes,
+      };
+    }
+  }
+
+  return best;
+}
+
 export default function Home() {
   const [status, setStatus] = useState("Prêt.");
   const [options, setOptions] = useState<SlotOption[]>([]);
@@ -1074,7 +1156,9 @@ export default function Home() {
 
     for (let index = 0; index < calendar.days.length; index += 1) {
       const day = calendar.days[index];
-      setStatus(`Analyse du rapport (${index + 1}/${calendar.days.length})...`);
+      setStatus(
+        `Analyse du rapport (${index + 1}/${calendar.days.length})...`
+      );
 
       const dateStr = localDateString(day);
       const dayStart = parseDateTime(dateStr, DEFAULT_DAY_START);
@@ -1157,15 +1241,15 @@ export default function Home() {
           } | null = null;
 
           for (const candidate of selected) {
-            const slot = await findBestSlot({
+            const slot = findBestSlotEstimate({
               dayStart,
               dayEnd,
               home: homePoint,
               appointment: candidate.point as GeoPoint,
               durationMin: DURATION_MIN.reseller,
               bufferMin: DEFAULT_BUFFER_MIN,
+              avgSpeedKmh: DEFAULT_AVG_SPEED_KMH,
               fixed,
-              travelMinutesFn: travelMinutesWithTraffic,
             });
             if (!slot) continue;
             const cost = slot.travelFromPrev + slot.travelToNext;
