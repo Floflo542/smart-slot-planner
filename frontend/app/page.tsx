@@ -15,6 +15,7 @@ const DEFAULT_DAY_END = "16:30";
 const DEFAULT_BUFFER_MIN = 10;
 const DEFAULT_AVG_SPEED_KMH = 60;
 const DEFAULT_SEARCH_DAYS = 10;
+const CALENDAR_RANGE_DAYS = 30;
 const TRAFFIC_MARGIN = 1.0;
 const TRAFFIC_BUFFER_MIN = 5;
 const ADMIN_WINDOWS = [
@@ -981,8 +982,7 @@ export default function Home() {
   };
 
   const handleLoadCalendar = async () => {
-    const searchDays = parseSearchDays();
-    await loadCalendarWindow(searchDays, form.includeWeekends);
+    await loadCalendarWindow(CALENDAR_RANGE_DAYS, true);
   };
 
   const loadResellers = async (commercial: Commercial) => {
@@ -1202,8 +1202,7 @@ export default function Home() {
   };
 
   const handleAnalyzeReport = async () => {
-    const searchDays = parseSearchDays();
-    const calendar = await loadCalendarWindow(searchDays, form.includeWeekends);
+    const calendar = await loadCalendarWindow(CALENDAR_RANGE_DAYS, true);
     if (!calendar) return;
     const resellersForReport = await loadResellers(form.commercial);
     const items = await buildReportItems(calendar, resellersForReport);
@@ -2182,7 +2181,8 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
                     calendarDayEvents.map((evt) => (
                       <div key={`${evt.summary}-${evt.start.toISOString()}`} className="point-row">
                         <div>
-                          {formatHHMM(evt.start)} - {formatHHMM(evt.end)}
+                          {formatHHMM(evt.start)} - {formatHHMM(evt.end)} ·{" "}
+                          {evt.summary || "RDV"}
                         </div>
                         <div className="small">
                           {resolveEventLocationLabel(evt) || "Adresse non renseignee"}
