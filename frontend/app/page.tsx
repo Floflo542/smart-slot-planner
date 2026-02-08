@@ -16,6 +16,7 @@ const DEFAULT_BUFFER_MIN = 10;
 const DEFAULT_AVG_SPEED_KMH = 60;
 const DEFAULT_SEARCH_DAYS = 10;
 const TRAFFIC_MARGIN = 1.0;
+const TRAFFIC_BUFFER_MIN = 5;
 
 function normalizeLocationKey(value: string) {
   return value
@@ -684,7 +685,7 @@ export default function Home() {
       if (res.ok && json?.ok && Number.isFinite(json.duration_min)) {
         const minutes = Math.max(
           1,
-          Math.round(json.duration_min * TRAFFIC_MARGIN)
+          Math.round(json.duration_min * TRAFFIC_MARGIN + TRAFFIC_BUFFER_MIN)
         );
         routeCache.current.set(key, minutes);
         routeSources.current.add(json?.provider ? String(json.provider) : "mapbox");
@@ -696,14 +697,17 @@ export default function Home() {
 
     const fallback = Math.max(
       1,
-      Math.round(travelMinutes(a, b, DEFAULT_AVG_SPEED_KMH) * TRAFFIC_MARGIN)
+      Math.round(
+        travelMinutes(a, b, DEFAULT_AVG_SPEED_KMH) * TRAFFIC_MARGIN +
+          TRAFFIC_BUFFER_MIN
+      )
     );
     routeCache.current.set(key, fallback);
     routeSources.current.add("estimation");
     return fallback;
   };
 
-async function geocodeAddress(label: string): Promise<GeoPoint> {
+  async function geocodeAddress(label: string): Promise<GeoPoint> {
     const trimmed = label.trim();
     const override =
       ADDRESS_OVERRIDES[trimmed.toLowerCase()] ||
@@ -722,6 +726,7 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
       const candidate = value.trim();
       if (candidate) attempts.add(candidate);
     };
+    let lastError = "";
 
     const expandAddress = (value: string) => {
       const variants = new Set<string>();
@@ -801,11 +806,13 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
       clearTimeout(timeout);
       if (!res) {
         geocodeCache.current.set(query, null);
+        lastError = "Geocodage indisponible";
         continue;
       }
       const json = await res.json();
       if (!res.ok || !json?.ok) {
         geocodeCache.current.set(query, null);
+        lastError = json?.error || `Geocodage indisponible (${res.status})`;
         continue;
       }
 
@@ -821,7 +828,9 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
     }
 
     geocodeCache.current.set(trimmed, null);
-    throw new Error("Adresse introuvable");
+    throw new Error(
+      lastError ? `Adresse introuvable (${lastError})` : "Adresse introuvable"
+    );
   }
 
   async function preloadIcsLocations(events: IcsEvent[]) {
