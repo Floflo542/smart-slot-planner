@@ -406,6 +406,11 @@ label.inline {
   color: var(--muted);
 }
 
+.home-label {
+  color: #f87171;
+  font-weight: 700;
+}
+
 @media (max-width: 900px) {
   .grid {
     grid-template-columns: 1fr;

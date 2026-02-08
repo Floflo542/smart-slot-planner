@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 const DURATION_MIN = {
   training: 60,
@@ -17,6 +17,11 @@ const DEFAULT_AVG_SPEED_KMH = 60;
 const DEFAULT_SEARCH_DAYS = 10;
 const TRAFFIC_MARGIN = 1.0;
 const TRAFFIC_BUFFER_MIN = 5;
+const ADMIN_WINDOWS = [
+  { start: "09:00", end: "11:00" },
+  { start: "14:00", end: "17:00" },
+] as const;
+const MAX_RESELLERS_PER_DAY = 3;
 
 function normalizeLocationKey(value: string) {
   return value
@@ -68,6 +73,12 @@ function resolveEventLocationLabel(event: IcsEvent) {
 
 function detectEventKind(event: IcsEvent): VisitType | "other" {
   const haystack = `${event.summary} ${event.location}`.toLowerCase();
+  if (/\bice\b/.test(haystack)) {
+    return "demo";
+  }
+  if (/\btt\b/.test(haystack)) {
+    return "training";
+  }
   if (haystack.includes("demo") || haystack.includes("démo")) {
     return "demo";
   }
@@ -101,12 +112,13 @@ function guessMapZoom(points: GeoPoint[]) {
 
 function buildStaticMapUrl(points: GeoPoint[]) {
   if (!points.length) return null;
-  const zoom = guessMapZoom(points);
+  const limited = points.slice(0, MAX_MAP_MARKERS);
+  const zoom = guessMapZoom(limited);
   const avgLat =
-    points.reduce((sum, p) => sum + p.lat, 0) / points.length;
+    limited.reduce((sum, p) => sum + p.lat, 0) / limited.length;
   const avgLon =
-    points.reduce((sum, p) => sum + p.lon, 0) / points.length;
-  const markers = points
+    limited.reduce((sum, p) => sum + p.lon, 0) / limited.length;
+  const markers = limited
     .map((point) => `${point.lat},${point.lon},red-pushpin`)
     .join("|");
   const params = new URLSearchParams({
@@ -119,6 +131,7 @@ function buildStaticMapUrl(points: GeoPoint[]) {
 }
 
 const MAX_GEOCODE_LOCATIONS = Number.POSITIVE_INFINITY;
+const MAX_MAP_MARKERS = 40;
 const COMMERCIALS = [
   {
     name: "Florian Monoyer",
@@ -157,7 +170,6 @@ type BestSlot = {
 
 type SlotOption = {
   slot: BestSlot;
-  missingLocations: number;
   dayEvents: number;
   cost: number;
 };
@@ -169,6 +181,41 @@ type Reseller = {
   name: string;
   address: string;
   notes?: string;
+};
+
+type AdminWindow = {
+  label: string;
+  start: Date;
+  end: Date;
+};
+
+type ReportSuggestion =
+  | {
+      kind: "reseller";
+      reseller: Reseller;
+      slot: BestSlot;
+      travelCost: number;
+    }
+  | {
+      kind: "admin";
+      windows: AdminWindow[];
+    }
+  | {
+      kind: "none";
+      reason: string;
+    };
+
+type ReportItem = {
+  day: Date;
+  counts: {
+    training: number;
+    demo: number;
+    reseller: number;
+    other: number;
+  };
+  totalEvents: number;
+  isFull: boolean;
+  suggestion: ReportSuggestion | null;
 };
 
 type IcsPayload = {
@@ -613,6 +660,114 @@ function mergeBusyEvents(events: FixedEvent[]) {
   return merged;
 }
 
+type BusyInterval = {
+  start: Date;
+  end: Date;
+};
+
+function mergeIntervals(intervals: BusyInterval[]) {
+  const sorted = [...intervals].sort(
+    (a, b) => a.start.getTime() - b.start.getTime()
+  );
+  const merged: BusyInterval[] = [];
+  for (const interval of sorted) {
+    const last = merged[merged.length - 1];
+    if (!last || interval.start.getTime() > last.end.getTime()) {
+      merged.push({ ...interval });
+      continue;
+    }
+    if (interval.end.getTime() > last.end.getTime()) {
+      last.end = interval.end;
+    }
+  }
+  return merged;
+}
+
+function buildBusyIntervals(
+  events: IcsEvent[],
+  dayStart: Date,
+  dayEnd: Date,
+  bufferMin: number
+) {
+  const intervals: BusyInterval[] = [];
+  for (const evt of events) {
+    const start = clampDate(
+      evt.isAllDay ? dayStart : evt.start,
+      dayStart,
+      dayEnd
+    );
+    const end = clampDate(
+      evt.isAllDay ? dayEnd : evt.end,
+      dayStart,
+      dayEnd
+    );
+    if (end.getTime() <= start.getTime()) continue;
+    const bufferedStart = clampDate(addMinutes(start, -bufferMin), dayStart, dayEnd);
+    const bufferedEnd = clampDate(addMinutes(end, bufferMin), dayStart, dayEnd);
+    intervals.push({ start: bufferedStart, end: bufferedEnd });
+  }
+  return mergeIntervals(intervals);
+}
+
+function findFreeBlocks(
+  windowStart: Date,
+  windowEnd: Date,
+  busy: BusyInterval[]
+) {
+  const blocks: BusyInterval[] = [];
+  let cursor = windowStart;
+  for (const interval of busy) {
+    if (interval.end.getTime() <= windowStart.getTime()) continue;
+    if (interval.start.getTime() >= windowEnd.getTime()) break;
+    if (interval.start.getTime() > cursor.getTime()) {
+      blocks.push({
+        start: cursor,
+        end: new Date(
+          Math.min(interval.start.getTime(), windowEnd.getTime())
+        ),
+      });
+    }
+    if (interval.end.getTime() > cursor.getTime()) {
+      cursor = new Date(Math.max(cursor.getTime(), interval.end.getTime()));
+    }
+    if (cursor.getTime() >= windowEnd.getTime()) break;
+  }
+  if (cursor.getTime() < windowEnd.getTime()) {
+    blocks.push({ start: cursor, end: windowEnd });
+  }
+  return blocks.filter((block) => block.end.getTime() > block.start.getTime());
+}
+
+function pickLargestBlock(blocks: BusyInterval[]) {
+  if (!blocks.length) return null;
+  return [...blocks].sort((a, b) => {
+    const durationA = a.end.getTime() - a.start.getTime();
+    const durationB = b.end.getTime() - b.start.getTime();
+    if (durationA !== durationB) return durationB - durationA;
+    return a.start.getTime() - b.start.getTime();
+  })[0];
+}
+
+function buildAdminWindowsForDay(day: Date, busy: BusyInterval[]) {
+  const dateStr = localDateString(day);
+  const windows: AdminWindow[] = [];
+
+  for (const window of ADMIN_WINDOWS) {
+    const windowStart = parseDateTime(dateStr, window.start);
+    const windowEnd = parseDateTime(dateStr, window.end);
+    const blocks = findFreeBlocks(windowStart, windowEnd, busy);
+    const best = pickLargestBlock(blocks);
+    if (!best) continue;
+    windows.push({
+      label: `${window.start} - ${window.end}`,
+      start: best.start,
+      end: best.end,
+    });
+  }
+
+  return windows;
+}
+
 async function findBestSlot(params: {
   dayStart: Date;
   dayEnd: Date;
@@ -704,9 +859,11 @@ export default function Home() {
   const [options, setOptions] = useState<SlotOption[]>([]);
   const [activeTab, setActiveTab] = useState<TabKey>("planner");
   const [calendarData, setCalendarData] = useState<CalendarData | null>(null);
+  const [reportItems, setReportItems] = useState<ReportItem[]>([]);
   const [selectedCalendarDay, setSelectedCalendarDay] = useState<Date | null>(
     null
   );
+  const [mapError, setMapError] = useState(false);
   const [resellersByCommercial, setResellersByCommercial] = useState(
     DEFAULT_RESELLERS
   );
@@ -729,7 +886,6 @@ export default function Home() {
 
   const geocodeCache = useRef(new Map<string, GeoPoint | null>());
   const routeCache = useRef(new Map<string, number>());
-  const routeSources = useRef(new Set<string>());
 
   const timezone = useMemo(
     () => Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -781,7 +937,6 @@ export default function Home() {
           Math.round(json.duration_min * TRAFFIC_MARGIN + TRAFFIC_BUFFER_MIN)
         );
         routeCache.current.set(key, minutes);
-        routeSources.current.add(json?.provider ? String(json.provider) : "mapbox");
         return minutes;
       }
     } catch {
@@ -796,7 +951,6 @@ export default function Home() {
       )
     );
     routeCache.current.set(key, fallback);
-    routeSources.current.add("estimation");
     return fallback;
   };
 
@@ -810,6 +964,198 @@ export default function Home() {
   const handleLoadCalendar = async () => {
     const searchDays = parseSearchDays();
     await loadCalendarWindow(searchDays, form.includeWeekends);
+  };
+
+  const buildReportItems = async (calendar: CalendarData) => {
+    const items: ReportItem[] = [];
+    const resellerPoints = new Map<string, GeoPoint | null>();
+    let homePoint: GeoPoint = {
+      label: DEFAULT_HOME_ADDRESS,
+      lat: DEFAULT_HOME_COORDS.lat,
+      lon: DEFAULT_HOME_COORDS.lon,
+    };
+
+    try {
+      homePoint = await geocodeAddress(DEFAULT_HOME_ADDRESS);
+    } catch {
+      // fallback to default coords
+    }
+
+    if (activeResellers.length) {
+      let done = 0;
+      for (const reseller of activeResellers) {
+        done += 1;
+        setStatus(
+          `Geocodage des revendeurs (${done}/${activeResellers.length})...`
+        );
+        try {
+          const point = await geocodeAddress(reseller.address);
+          resellerPoints.set(reseller.id, point);
+        } catch {
+          resellerPoints.set(reseller.id, null);
+        }
+      }
+    }
+
+    for (let index = 0; index < calendar.days.length; index += 1) {
+      const day = calendar.days[index];
+      setStatus(`Analyse du rapport (${index + 1}/${calendar.days.length})...`);
+
+      const dateStr = localDateString(day);
+      const dayStart = parseDateTime(dateStr, DEFAULT_DAY_START);
+      const dayEnd = parseDateTime(dateStr, DEFAULT_DAY_END);
+      const dayEvents = filterIcsEventsForDay(
+        calendar.windowEvents,
+        dayStart,
+        dayEnd
+      );
+
+      const counts = {
+        training: 0,
+        demo: 0,
+        reseller: 0,
+        other: 0,
+      };
+
+      for (const evt of dayEvents) {
+        const kind = detectEventKind(evt);
+        if (kind === "other") {
+          counts.other += 1;
+        } else {
+          counts[kind] += 1;
+        }
+      }
+
+      const isFull =
+        counts.training >= 4 ||
+        counts.demo >= 2 ||
+        (counts.demo >= 1 && counts.training >= 2);
+
+      let suggestion: ReportSuggestion | null = null;
+
+      if (!isFull) {
+        const fixed = await buildFixedEventsFromIcs(
+          calendar.windowEvents,
+          dayStart,
+          dayEnd,
+          calendar.locationMap
+        );
+
+        const dayPoints: GeoPoint[] = [];
+        for (const evt of dayEvents) {
+          const locationLabel = resolveEventLocationLabel(evt);
+          if (!locationLabel) continue;
+          const point = calendar.locationMap.get(locationLabel);
+          if (point) {
+            dayPoints.push(point);
+          }
+        }
+
+        const resellerCandidates = activeResellers
+          .map((reseller) => ({
+            reseller,
+            point: resellerPoints.get(reseller.id) || null,
+          }))
+          .filter((entry) => entry.point);
+
+        if (resellerCandidates.length) {
+          const ranked = [...resellerCandidates].sort((a, b) => {
+            if (!dayPoints.length) return 0;
+            const distanceA = Math.min(
+              ...dayPoints.map((point) =>
+                haversineKm(point, a.point as GeoPoint)
+              )
+            );
+            const distanceB = Math.min(
+              ...dayPoints.map((point) =>
+                haversineKm(point, b.point as GeoPoint)
+              )
+            );
+            return distanceA - distanceB;
+          });
+
+          const selected = ranked.slice(0, MAX_RESELLERS_PER_DAY);
+          let best: {
+            reseller: Reseller;
+            slot: BestSlot;
+            cost: number;
+          } | null = null;
+
+          for (const candidate of selected) {
+            const slot = await findBestSlot({
+              dayStart,
+              dayEnd,
+              home: homePoint,
+              appointment: candidate.point as GeoPoint,
+              durationMin: DURATION_MIN.reseller,
+              bufferMin: DEFAULT_BUFFER_MIN,
+              fixed,
+              travelMinutesFn: travelMinutesWithTraffic,
+            });
+            if (!slot) continue;
+            const cost = slot.travelFromPrev + slot.travelToNext;
+            if (
+              !best ||
+              cost < best.cost ||
+              (cost === best.cost &&
+                slot.start.getTime() < best.slot.start.getTime())
+            ) {
+              best = {
+                reseller: candidate.reseller,
+                slot,
+                cost,
+              };
+            }
+          }
+
+          if (best) {
+            suggestion = {
+              kind: "reseller",
+              reseller: best.reseller,
+              slot: best.slot,
+              travelCost: best.cost,
+            };
+          }
+        }
+
+        if (!suggestion) {
+          const busy = buildBusyIntervals(
+            dayEvents,
+            dayStart,
+            dayEnd,
+            DEFAULT_BUFFER_MIN
+          );
+          const adminWindows = buildAdminWindowsForDay(day, busy);
+          if (adminWindows.length) {
+            suggestion = { kind: "admin", windows: adminWindows };
+          } else {
+            suggestion = {
+              kind: "none",
+              reason: "Aucun créneau admin disponible.",
+            };
+          }
+        }
+      }
+
+      items.push({
+        day,
+        counts,
+        totalEvents: dayEvents.length,
+        isFull,
+        suggestion,
+      });
+    }
+
+    return items;
+  };
+
+  const handleAnalyzeReport = async () => {
+    const searchDays = parseSearchDays();
+    const calendar = await loadCalendarWindow(searchDays, form.includeWeekends);
+    if (!calendar) return;
+    const items = await buildReportItems(calendar);
+    setReportItems(items);
+    setStatus("Rapport mis a jour.");
   };
 
   const handleAddReseller = () => {
@@ -1158,7 +1504,6 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
     setStatus(`Analyse des ${searchDays} prochains ${windowLabel} (${modeLabel})...`);
 
     try {
-      routeSources.current = new Set();
       let home: GeoPoint;
       let appointment: GeoPoint;
       let homeNote: string | null = null;
@@ -1235,14 +1580,10 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
           continue;
         }
 
-        const missingLocations = fixed.filter(
-          (evt) => evt.locationLabel && !evt.location
-        ).length;
         const travelCost = best.travelFromPrev + best.travelToNext;
 
         slotCandidates.push({
           slot: best,
-          missingLocations,
           cost: travelCost,
           dayEvents: dayEvents.length,
         });
@@ -1272,12 +1613,6 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
 
       const buildNotes = (candidate: SlotOption) => {
         const notes: string[] = [];
-        notes.push("Source calendrier: lien ICS.");
-        if (routeSources.current.size > 0) {
-          notes.push(
-            `Trajets: ${Array.from(routeSources.current).join(" + ")}.`
-          );
-        }
         if (isEmptyCalendar) {
           notes.push(
             "Aucun RDV detecte dans le calendrier ICS (planning base sur un agenda vide)."
@@ -1285,11 +1620,6 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
         }
         if (homeNote) {
           notes.push(homeNote);
-        }
-        if (candidate.missingLocations > 0) {
-          notes.push(
-            `${candidate.missingLocations} RDV calendrier sans geocodage: trajets estimes a 0 min.`
-          );
         }
         notes.push(`RDV detectes ce jour: ${candidate.dayEvents}.`);
         if (skipped > 0) {
@@ -1313,66 +1643,7 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
     }
   }
 
-  const reportDays = useMemo(() => {
-    if (!calendarData) return [];
-    return calendarData.days.map((day) => {
-      const dateStr = localDateString(day);
-      const dayStart = parseDateTime(dateStr, DEFAULT_DAY_START);
-      const dayEnd = parseDateTime(dateStr, DEFAULT_DAY_END);
-      const dayEvents = filterIcsEventsForDay(
-        calendarData.windowEvents,
-        dayStart,
-        dayEnd
-      );
-
-      const counts = {
-        training: 0,
-        demo: 0,
-        reseller: 0,
-        other: 0,
-      };
-
-      for (const evt of dayEvents) {
-        const kind = detectEventKind(evt);
-        if (kind === "other") {
-          counts.other += 1;
-        } else {
-          counts[kind] += 1;
-        }
-      }
-
-      const isFull =
-        counts.training >= 4 ||
-        counts.demo >= 2 ||
-        (counts.demo >= 1 && counts.training >= 2);
-
-      let suggestions: Reseller[] = [];
-      if (!isFull) {
-        const dayPostalCodes = new Set<string>();
-        for (const evt of dayEvents) {
-          const locationLabel = resolveEventLocationLabel(evt);
-          for (const code of extractPostalCodes(locationLabel)) {
-            dayPostalCodes.add(code);
-          }
-        }
-        suggestions = activeResellers.filter((reseller) => {
-          const codes = extractPostalCodes(reseller.address);
-          return codes.some((code) => dayPostalCodes.has(code));
-        });
-        if (suggestions.length === 0) {
-          suggestions = activeResellers.slice(0, 3);
-        }
-      }
-
-      return {
-        day,
-        counts,
-        totalEvents: dayEvents.length,
-        isFull,
-        suggestions,
-      };
-    });
-  }, [calendarData, activeResellers]);
+  const reportDays = reportItems;
 
   const calendarDays = calendarData?.days || [];
   const activeCalendarDay = selectedCalendarDay || calendarDays[0] || null;
@@ -1402,6 +1673,21 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
   }, [calendarData, calendarDayEvents]);
 
   const mapUrl = useMemo(() => buildStaticMapUrl(calendarPoints), [calendarPoints]);
+
+  useEffect(() => {
+    setMapError(false);
+  }, [mapUrl]);
+
+  const renderTravelLabel = (label?: string, fallback?: string) => {
+    const raw = (label || fallback || "").toLowerCase();
+    if (raw === "départ") {
+      return <span className="home-label">Maison (départ)</span>;
+    }
+    if (raw === "fin") {
+      return <span className="home-label">Maison (fin)</span>;
+    }
+    return <span>{label || fallback}</span>;
+  };
 
   return (
     <main className="page">
@@ -1477,9 +1763,6 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
                 </select>
               </div>
             </div>
-            <p className="small" style={{ marginTop: 10 }}>
-              Le calendrier ICS est relie automatiquement au commercial selectionne.
-            </p>
           </section>
 
           <section className="card">
@@ -1621,10 +1904,11 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
                         <div className="small">Trajet estimé</div>
                         <div style={{ fontSize: 20, fontWeight: 600 }}>
                           {slot.travelFromPrev} min depuis{" "}
-                          {slot.prevLabel || "départ"}
+                          {renderTravelLabel(slot.prevLabel, "départ")}
                         </div>
                         <div className="small">
-                          {slot.travelToNext} min vers {slot.nextLabel || "fin"}
+                          {slot.travelToNext} min vers{" "}
+                          {renderTravelLabel(slot.nextLabel, "fin")}
                         </div>
                       </div>
                     </div>
@@ -1656,7 +1940,11 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
         <section className="card">
           <div className="card-title">Rapport des journées</div>
           <div className="row" style={{ marginBottom: 12 }}>
-            <button className="btn ghost" type="button" onClick={handleLoadCalendar}>
+            <button
+              className="btn ghost"
+              type="button"
+              onClick={handleAnalyzeReport}
+            >
               Analyser le calendrier
             </button>
             <span className="badge">
@@ -1666,6 +1954,10 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
           {!calendarData ? (
             <div className="small">
               Chargez le calendrier pour obtenir le rapport détaillé.
+            </div>
+          ) : reportDays.length === 0 ? (
+            <div className="small">
+              Lancez l'analyse pour generer les recommandations.
             </div>
           ) : (
             <div className="report-list">
@@ -1692,21 +1984,58 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
                   </div>
                   {!report.isFull ? (
                     <div className="report-suggestions">
-                      <div className="small">Revendeurs suggeres</div>
-                      {report.suggestions.length ? (
-                        <div className="suggestion-list">
-                          {report.suggestions.map((reseller) => (
-                            <div key={reseller.id} className="suggestion-item">
-                              <div>{reseller.name}</div>
-                              <div className="small">{reseller.address}</div>
+                      {report.suggestion?.kind === "reseller" ? (
+                        <>
+                          <div className="small">
+                            Revendeur recommande (le plus proche)
+                          </div>
+                          <div className="suggestion-item">
+                            <div>{report.suggestion.reseller.name}</div>
+                            <div className="small">
+                              {report.suggestion.reseller.address}
                             </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="small">
-                          Aucun revendeur disponible pour ce commercial.
-                        </div>
-                      )}
+                            <div className="small" style={{ marginTop: 6 }}>
+                              Creneau optimal:{" "}
+                              {formatHHMM(report.suggestion.slot.start)} -{" "}
+                              {formatHHMM(report.suggestion.slot.end)}
+                            </div>
+                            <div className="small">
+                              Trajet estime:{" "}
+                              {report.suggestion.slot.travelFromPrev} min
+                              depuis{" "}
+                              {renderTravelLabel(
+                                report.suggestion.slot.prevLabel,
+                                "départ"
+                              )}{" "}
+                              / {report.suggestion.slot.travelToNext} min vers{" "}
+                              {renderTravelLabel(
+                                report.suggestion.slot.nextLabel,
+                                "fin"
+                              )}
+                            </div>
+                          </div>
+                        </>
+                      ) : null}
+                      {report.suggestion?.kind === "admin" ? (
+                        <>
+                          <div className="small">
+                            Admin recommande (plages 09:00-11:00 et 14:00-17:00)
+                          </div>
+                          <div className="suggestion-list">
+                            {report.suggestion.windows.map((window, idx) => (
+                              <div key={idx} className="suggestion-item">
+                                <div>Fenetre {window.label}</div>
+                                <div className="small">
+                                  {formatHHMM(window.start)} - {formatHHMM(window.end)}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </>
+                      ) : null}
+                      {report.suggestion?.kind === "none" ? (
+                        <div className="small">{report.suggestion.reason}</div>
+                      ) : null}
                     </div>
                   ) : null}
                 </div>
@@ -1762,15 +2091,18 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
                 })}
               </div>
               <div className="calendar-map">
-                {mapUrl ? (
+                {mapUrl && !mapError ? (
                   <img
                     className="map-image"
                     src={mapUrl}
                     alt="Carte des RDV"
+                    onError={() => setMapError(true)}
                   />
                 ) : (
                   <div className="map-placeholder">
-                    Aucun point geocode pour ce jour.
+                    {mapUrl
+                      ? "Carte indisponible pour ce jour."
+                      : "Aucun point geocode pour ce jour."}
                   </div>
                 )}
                 <div className="points-list">
