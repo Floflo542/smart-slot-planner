@@ -36,6 +36,10 @@ const SUMMARY_LOCATION_OVERRIDES: Record<string, string> = {
   "depot speed pro michael mainville":
     "Grand'Route 202, 4347 Fexhe-le-Haut-Clocher, Belgique",
 };
+const ADDRESS_OVERRIDES: Record<string, string> = {
+  "chau. du roeulx 1003, 7021 mons":
+    "Chaussée du Roeulx 1003, 7021 Mons, Belgique",
+};
 
 function resolveEventLocationLabel(event: IcsEvent) {
   const locationRaw = event.location?.trim() || "";
@@ -52,7 +56,13 @@ function resolveEventLocationLabel(event: IcsEvent) {
   }
   const base = locationRaw || summaryOverride;
   if (!base) return "";
-  return LOCATION_OVERRIDES[normalizeLocationKey(base)] || base;
+  const normalized = normalizeLocationKey(base);
+  return (
+    ADDRESS_OVERRIDES[base.toLowerCase()] ||
+    ADDRESS_OVERRIDES[normalized] ||
+    LOCATION_OVERRIDES[normalized] ||
+    base
+  );
 }
 
 const MAX_GEOCODE_LOCATIONS = Number.POSITIVE_INFINITY;
@@ -695,6 +705,12 @@ export default function Home() {
 
 async function geocodeAddress(label: string): Promise<GeoPoint> {
     const trimmed = label.trim();
+    const override =
+      ADDRESS_OVERRIDES[trimmed.toLowerCase()] ||
+      ADDRESS_OVERRIDES[normalizeLocationKey(trimmed)];
+    if (override) {
+      return geocodeAddress(override);
+    }
     const cached = geocodeCache.current.get(trimmed);
     if (cached) return cached;
     if (cached === null) {
@@ -724,6 +740,11 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
         expanded = expanded.replace(regex, replacement);
       }
       if (expanded !== value) variants.add(expanded);
+      const simplified = value
+        .replace(/[’']/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+      if (simplified !== value) variants.add(simplified);
       return variants;
     };
 
@@ -731,6 +752,7 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
     for (const variant of expandAddress(trimmed)) {
       addAttempt(variant);
     }
+    addAttempt(trimmed.replace(/\./g, ""));
 
     const withCommaPostal = trimmed.replace(
       /(\S)\s+(\d{4})\s+/,
@@ -740,6 +762,7 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
     for (const variant of expandAddress(withCommaPostal)) {
       addAttempt(variant);
     }
+    addAttempt(withCommaPostal.replace(/\./g, ""));
 
     const hasCountry = /belgique|belgium/i.test(trimmed);
     if (!hasCountry) {
@@ -748,11 +771,16 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
       for (const variant of expandAddress(withCommaPostal)) {
         addAttempt(`${variant}, Belgique`);
       }
+      addAttempt(`${trimmed.replace(/\./g, "")}, Belgique`);
     }
 
     const postalMatch = trimmed.match(/(\d{4})\s+(.+)/);
     if (postalMatch) {
       addAttempt(`${postalMatch[1]} ${postalMatch[2]}, Belgique`);
+      addAttempt(`${postalMatch[1]} ${postalMatch[2].replace(/\./g, "")}, Belgique`);
+      addAttempt(
+        `${postalMatch[2]}, ${postalMatch[1]}, Belgique`
+      );
     }
 
     for (const query of attempts) {
