@@ -3,8 +3,10 @@ import { NextResponse } from "next/server";
 const USER_AGENT =
   process.env.GEOCODE_USER_AGENT ||
   "smart-slot-planner/1.0 (geocode; contact: dev@example.com)";
-const GEOCODE_EMAIL = process.env.GEOCODE_EMAIL || "dev@example.com";
-const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN || "";
+const DISTANCEMATRIX_GEOCODE_KEY =
+  process.env.DISTANCEMATRIX_GEOCODE_KEY ||
+  process.env.DISTANCEMATRIX_KEY ||
+  "";
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
@@ -18,18 +20,19 @@ export async function GET(req: Request) {
     );
   }
 
-  if (!MAPBOX_TOKEN) {
+  if (!DISTANCEMATRIX_GEOCODE_KEY) {
     return NextResponse.json(
-      { ok: false, error: "MAPBOX_TOKEN manquant" },
+      { ok: false, error: "DISTANCEMATRIX_GEOCODE_KEY manquant" },
       { status: 500 }
     );
   }
 
-  const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(
-    q
-  )}.json?access_token=${encodeURIComponent(
-    MAPBOX_TOKEN
-  )}&limit=1&country=be&language=fr&types=address,place,postcode,locality`;
+  const params = new URLSearchParams({
+    address: q,
+    key: DISTANCEMATRIX_GEOCODE_KEY,
+    language: "fr",
+  });
+  const url = `https://api.distancematrix.ai/maps/api/geocode/json?${params.toString()}`;
 
   const upstream = await fetch(url, {
     headers: {
@@ -38,32 +41,36 @@ export async function GET(req: Request) {
   });
 
   const json = (await upstream.json()) as {
-    features?: Array<{
-      center: [number, number];
-      place_name: string;
+    status?: string;
+    results?: Array<{
+      formatted_address?: string;
+      geometry?: {
+        location?: { lat?: number; lng?: number };
+      };
     }>;
-    message?: string;
+    error_message?: string;
   };
 
-  if (!upstream.ok) {
+  if (!upstream.ok || json?.status !== "OK") {
     return NextResponse.json(
       {
         ok: false,
-        error: `Mapbox indisponible (${upstream.status})${json?.message ? `: ${json.message}` : ""}`,
+        error: `Geocodage indisponible (${upstream.status})${json?.error_message ? `: ${json.error_message}` : ""}`,
       },
       { status: 502 }
     );
   }
 
-  if (!json.features || json.features.length === 0) {
+  if (!json.results || json.results.length === 0) {
     return NextResponse.json(
       { ok: false, error: "Adresse introuvable" },
       { status: 404 }
     );
   }
 
-  const best = json.features[0];
-  const [lon, lat] = best.center || [];
+  const best = json.results[0];
+  const lat = best.geometry?.location?.lat;
+  const lon = best.geometry?.location?.lng;
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
     return NextResponse.json(
       { ok: false, error: "Coordonnées invalides" },
@@ -75,6 +82,6 @@ export async function GET(req: Request) {
     ok: true,
     lat,
     lon,
-    label: best.place_name,
+    label: best.formatted_address || q,
   });
 }
