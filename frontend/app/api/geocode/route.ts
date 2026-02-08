@@ -6,14 +6,7 @@ const USER_AGENT =
 const GEOCODE_EMAIL = process.env.GEOCODE_EMAIL || "";
 const NOMINATIM_BASE_URL =
   process.env.NOMINATIM_BASE_URL || "https://nominatim.openstreetmap.org";
-const DISTANCEMATRIX_GEOCODE_BASE_URL =
-  process.env.DISTANCEMATRIX_GEOCODE_BASE_URL ||
-  process.env.DISTANCEMATRIX_BASE_URL ||
-  "https://api.distancematrix.ai";
-const DISTANCEMATRIX_GEOCODE_KEY =
-  process.env.DISTANCEMATRIX_GEOCODE_KEY ||
-  process.env.DISTANCEMATRIX_KEY ||
-  "";
+const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN || "";
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
@@ -27,16 +20,14 @@ export async function GET(req: Request) {
     );
   }
 
-  let dmError: string | null = null;
+  let primaryError: string | null = null;
 
-  if (DISTANCEMATRIX_GEOCODE_KEY) {
-    const params = new URLSearchParams({
-      address: q,
-      key: DISTANCEMATRIX_GEOCODE_KEY,
-      language: "fr",
-      region: "be",
-    });
-    const url = `${DISTANCEMATRIX_GEOCODE_BASE_URL}/maps/api/geocode/json?${params.toString()}`;
+  if (MAPBOX_TOKEN) {
+    const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(
+      q
+    )}.json?access_token=${encodeURIComponent(
+      MAPBOX_TOKEN
+    )}&limit=1&country=be&language=fr&types=address,place,postcode,locality`;
 
     const upstream = await fetch(url, {
       headers: {
@@ -45,34 +36,30 @@ export async function GET(req: Request) {
     });
 
     const json = (await upstream.json()) as {
-      status?: string;
-      results?: Array<{
-        formatted_address?: string;
-        geometry?: {
-          location?: { lat?: number; lng?: number };
-        };
+      features?: Array<{
+        center: [number, number];
+        place_name: string;
       }>;
-      error_message?: string;
+      message?: string;
     };
 
-    if (upstream.ok && json?.status === "OK" && json.results?.length) {
-      const best = json.results[0];
-      const lat = best.geometry?.location?.lat;
-      const lon = best.geometry?.location?.lng;
+    if (upstream.ok && json?.features?.length) {
+      const best = json.features[0];
+      const [lon, lat] = best.center || [];
       if (Number.isFinite(lat) && Number.isFinite(lon)) {
         return NextResponse.json({
           ok: true,
           lat,
           lon,
-          label: best.formatted_address || q,
+          label: best.place_name || q,
         });
       }
-      dmError = "Coordonnées invalides";
+      primaryError = "Coordonnées invalides";
     } else {
-      dmError = `DistanceMatrix: ${json?.status || upstream.status}`;
+      primaryError = `Mapbox: ${upstream.status}${json?.message ? `: ${json.message}` : ""}`;
     }
   } else {
-    dmError = "DISTANCEMATRIX_GEOCODE_KEY manquant";
+    primaryError = "MAPBOX_TOKEN manquant";
   }
 
   const nominatimParams = new URLSearchParams({
@@ -112,7 +99,10 @@ export async function GET(req: Request) {
   }
 
   return NextResponse.json(
-    { ok: false, error: `Adresse introuvable${dmError ? ` (${dmError})` : ""}` },
+    {
+      ok: false,
+      error: `Adresse introuvable${primaryError ? ` (${primaryError})` : ""}`,
+    },
     { status: 404 }
   );
 }
