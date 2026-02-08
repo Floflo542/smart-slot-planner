@@ -2077,30 +2077,37 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
                     <div className="report-suggestions">
                       {report.suggestion?.kind === "reseller" ? (
                         <>
+                          {(() => {
+                            const suggestion = report.suggestion;
+                            if (!suggestion || suggestion.kind !== "reseller") {
+                              return null;
+                            }
+                            return (
+                              <>
                           <div className="small">
                             Revendeur recommande (le plus proche)
                           </div>
                           <div className="suggestion-item">
-                            <div>{report.suggestion.reseller.name}</div>
+                            <div>{suggestion.reseller.name}</div>
                             <div className="small">
-                              {report.suggestion.reseller.address}
+                              {suggestion.reseller.address}
                             </div>
                             <div className="small" style={{ marginTop: 6 }}>
                               Creneau optimal:{" "}
-                              {formatHHMM(report.suggestion.slot.start)} -{" "}
-                              {formatHHMM(report.suggestion.slot.end)}
+                              {formatHHMM(suggestion.slot.start)} -{" "}
+                              {formatHHMM(suggestion.slot.end)}
                             </div>
                             <div className="small">
                               Trajet estime:{" "}
-                              {report.suggestion.slot.travelFromPrev} min
+                              {suggestion.slot.travelFromPrev} min
                               depuis{" "}
                               {renderTravelLabel(
-                                report.suggestion.slot.prevLabel,
+                                suggestion.slot.prevLabel,
                                 "départ"
                               )}{" "}
-                              / {report.suggestion.slot.travelToNext} min vers{" "}
+                              / {suggestion.slot.travelToNext} min vers{" "}
                               {renderTravelLabel(
-                                report.suggestion.slot.nextLabel,
+                                suggestion.slot.nextLabel,
                                 "fin"
                               )}
                             </div>
@@ -2110,11 +2117,11 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
                                 type="button"
                                 onClick={() =>
                                   downloadIcsRange(
-                                    report.suggestion!.slot.start,
-                                    report.suggestion!.slot.end,
+                                    suggestion.slot.start,
+                                    suggestion.slot.end,
                                     buildResellerIcsPayload(
-                                      report.suggestion!.reseller,
-                                      report.suggestion!.slot
+                                      suggestion.reseller,
+                                      suggestion.slot
                                     )
                                   )
                                 }
@@ -2123,6 +2130,9 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
                               </button>
                             </div>
                           </div>
+                              </>
+                            );
+                          })()}
                         </>
                       ) : null}
                       {report.suggestion?.kind === "admin" ? (
