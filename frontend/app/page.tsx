@@ -554,10 +554,10 @@ function buildIcsEvent(params: {
   ].join("\r\n");
 }
 
-function downloadIcsFile(slot: BestSlot, payload: IcsPayload) {
+function downloadIcsRange(start: Date, end: Date, payload: IcsPayload) {
   const ics = buildIcsEvent({
-    start: slot.start,
-    end: slot.end,
+    start,
+    end,
     summary: payload.summary,
     location: payload.location,
     description: payload.description,
@@ -566,13 +566,17 @@ function downloadIcsFile(slot: BestSlot, payload: IcsPayload) {
   const blob = new Blob([ics], { type: "text/calendar;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
-  const dateStamp = localDateString(slot.start);
+  const dateStamp = localDateString(start);
   a.href = url;
   a.download = `rdv-${dateStamp}.ics`;
   document.body.appendChild(a);
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+}
+
+function downloadIcsFile(slot: BestSlot, payload: IcsPayload) {
+  downloadIcsRange(slot.start, slot.end, payload);
 }
 
 function formatDateLabel(date: Date) {
@@ -927,6 +931,25 @@ export default function Home() {
       summary: subject,
       location: form.appointmentAddress.trim(),
       description,
+    };
+  };
+
+  const buildResellerIcsPayload = (
+    reseller: Reseller,
+    slot: BestSlot
+  ): IcsPayload => {
+    return {
+      summary: `REVENDEUR — ${reseller.name}`,
+      location: reseller.address,
+      description: `Commercial: ${form.commercial}\nType: revendeur\nAdresse: ${reseller.address}\nTrajet estime: ${slot.travelFromPrev} min (aller) / ${slot.travelToNext} min (retour).`,
+    };
+  };
+
+  const buildAdminIcsPayload = (window: AdminWindow): IcsPayload => {
+    return {
+      summary: `ADMIN — ${form.commercial}`,
+      location: "Administration",
+      description: `Commercial: ${form.commercial}\nType: admin\nFenetre: ${window.label}`,
     };
   };
 
@@ -2081,6 +2104,24 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
                                 "fin"
                               )}
                             </div>
+                            <div className="row" style={{ marginTop: 8 }}>
+                              <button
+                                className="btn ghost"
+                                type="button"
+                                onClick={() =>
+                                  downloadIcsRange(
+                                    report.suggestion!.slot.start,
+                                    report.suggestion!.slot.end,
+                                    buildResellerIcsPayload(
+                                      report.suggestion!.reseller,
+                                      report.suggestion!.slot
+                                    )
+                                  )
+                                }
+                              >
+                                Télécharger .ics
+                              </button>
+                            </div>
                           </div>
                         </>
                       ) : null}
@@ -2095,6 +2136,21 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
                                 <div>Fenetre {window.label}</div>
                                 <div className="small">
                                   {formatHHMM(window.start)} - {formatHHMM(window.end)}
+                                </div>
+                                <div className="row" style={{ marginTop: 8 }}>
+                                  <button
+                                    className="btn ghost"
+                                    type="button"
+                                    onClick={() =>
+                                      downloadIcsRange(
+                                        window.start,
+                                        window.end,
+                                        buildAdminIcsPayload(window)
+                                      )
+                                    }
+                                  >
+                                    Télécharger .ics
+                                  </button>
                                 </div>
                               </div>
                             ))}
