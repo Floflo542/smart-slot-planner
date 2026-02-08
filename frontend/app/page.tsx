@@ -66,6 +66,58 @@ function resolveEventLocationLabel(event: IcsEvent) {
   );
 }
 
+function detectEventKind(event: IcsEvent): VisitType | "other" {
+  const haystack = `${event.summary} ${event.location}`.toLowerCase();
+  if (haystack.includes("demo") || haystack.includes("démo")) {
+    return "demo";
+  }
+  if (haystack.includes("formation")) {
+    return "training";
+  }
+  if (haystack.includes("revendeur")) {
+    return "reseller";
+  }
+  return "other";
+}
+
+function extractPostalCodes(value: string) {
+  const matches = value.match(/\b\d{4}\b/g);
+  return matches ? Array.from(new Set(matches)) : [];
+}
+
+function guessMapZoom(points: GeoPoint[]) {
+  if (points.length <= 1) return 13;
+  const lats = points.map((p) => p.lat);
+  const lons = points.map((p) => p.lon);
+  const latSpan = Math.max(...lats) - Math.min(...lats);
+  const lonSpan = Math.max(...lons) - Math.min(...lons);
+  const span = Math.max(latSpan, lonSpan);
+  if (span < 0.02) return 14;
+  if (span < 0.05) return 12;
+  if (span < 0.15) return 11;
+  if (span < 0.3) return 10;
+  return 9;
+}
+
+function buildStaticMapUrl(points: GeoPoint[]) {
+  if (!points.length) return null;
+  const zoom = guessMapZoom(points);
+  const avgLat =
+    points.reduce((sum, p) => sum + p.lat, 0) / points.length;
+  const avgLon =
+    points.reduce((sum, p) => sum + p.lon, 0) / points.length;
+  const markers = points
+    .map((point) => `${point.lat},${point.lon},red-pushpin`)
+    .join("|");
+  const params = new URLSearchParams({
+    center: `${avgLat},${avgLon}`,
+    zoom: String(zoom),
+    size: "900x420",
+    markers,
+  });
+  return `https://staticmap.openstreetmap.de/staticmap.php?${params.toString()}`;
+}
+
 const MAX_GEOCODE_LOCATIONS = Number.POSITIVE_INFINITY;
 const COMMERCIALS = [
   {
@@ -110,6 +162,15 @@ type SlotOption = {
   cost: number;
 };
 
+type TabKey = "planner" | "report" | "calendar" | "resellers";
+
+type Reseller = {
+  id: string;
+  name: string;
+  address: string;
+  notes?: string;
+};
+
 type IcsPayload = {
   summary: string;
   location: string;
@@ -122,6 +183,21 @@ type IcsEvent = {
   start: Date;
   end: Date;
   isAllDay: boolean;
+};
+
+type CalendarData = {
+  events: IcsEvent[];
+  windowEvents: IcsEvent[];
+  locationMap: Map<string, GeoPoint | null>;
+  rangeStart: Date;
+  rangeEnd: Date;
+  days: Date[];
+  skipped: number;
+  isEmpty: boolean;
+};
+
+const DEFAULT_RESELLERS: Record<Commercial, Reseller[]> = {
+  "Florian Monoyer": [],
 };
 
 type FormState = {
@@ -626,6 +702,19 @@ async function findBestSlot(params: {
 export default function Home() {
   const [status, setStatus] = useState("Prêt.");
   const [options, setOptions] = useState<SlotOption[]>([]);
+  const [activeTab, setActiveTab] = useState<TabKey>("planner");
+  const [calendarData, setCalendarData] = useState<CalendarData | null>(null);
+  const [selectedCalendarDay, setSelectedCalendarDay] = useState<Date | null>(
+    null
+  );
+  const [resellersByCommercial, setResellersByCommercial] = useState(
+    DEFAULT_RESELLERS
+  );
+  const [resellerDraft, setResellerDraft] = useState({
+    name: "",
+    address: "",
+    notes: "",
+  });
 
   const [form, setForm] = useState<FormState>({
     commercial: "Florian Monoyer",
@@ -648,6 +737,10 @@ export default function Home() {
   );
   const commercialIcsUrl =
     COMMERCIALS.find((item) => item.name === form.commercial)?.icsUrl || "";
+  const activeResellers = useMemo(
+    () => resellersByCommercial[form.commercial] || [],
+    [resellersByCommercial, form.commercial]
+  );
 
   const buildIcsPayload = (slot: BestSlot): IcsPayload => {
     const subject =
@@ -707,7 +800,41 @@ export default function Home() {
     return fallback;
   };
 
-  async function geocodeAddress(label: string): Promise<GeoPoint> {
+  const parseSearchDays = () => {
+    const searchDaysRaw = Number.parseInt(form.searchDays, 10);
+    return Number.isFinite(searchDaysRaw) && searchDaysRaw > 0
+      ? searchDaysRaw
+      : DEFAULT_SEARCH_DAYS;
+  };
+
+  const handleLoadCalendar = async () => {
+    const searchDays = parseSearchDays();
+    await loadCalendarWindow(searchDays, form.includeWeekends);
+  };
+
+  const handleAddReseller = () => {
+    const name = resellerDraft.name.trim();
+    const address = resellerDraft.address.trim();
+    if (!name || !address) {
+      setStatus("Nom ou adresse du revendeur manquante.");
+      return;
+    }
+    const entry: Reseller = {
+      id: crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`,
+      name,
+      address,
+      notes: resellerDraft.notes.trim() || undefined,
+    };
+
+    setResellersByCommercial((prev) => ({
+      ...prev,
+      [form.commercial]: [...(prev[form.commercial] || []), entry],
+    }));
+    setResellerDraft({ name: "", address: "", notes: "" });
+    setStatus("Revendeur ajoute.");
+  };
+
+async function geocodeAddress(label: string): Promise<GeoPoint> {
     const trimmed = label.trim();
     const override =
       ADDRESS_OVERRIDES[trimmed.toLowerCase()] ||
@@ -928,6 +1055,82 @@ export default function Home() {
     return fixed;
   }
 
+  async function loadCalendarWindow(
+    searchDays: number,
+    includeWeekends: boolean
+  ) {
+    if (!commercialIcsUrl.trim()) {
+      setStatus("Aucun calendrier disponible pour ce commercial.");
+      return null;
+    }
+
+    setStatus("Chargement du calendrier ICS...");
+    const res = await fetch(
+      `/api/ics?url=${encodeURIComponent(commercialIcsUrl)}`
+    );
+    if (!res.ok) {
+      setStatus("Impossible de charger le lien ICS.");
+      return null;
+    }
+    const text = await res.text();
+
+    const rawEventCount = (text.match(/BEGIN:VEVENT/gi) || []).length;
+    const rawFreeBusyCount = (text.match(/BEGIN:VFREEBUSY/gi) || []).length;
+    if (rawEventCount === 0 && rawFreeBusyCount === 0) {
+      setStatus("Calendrier ICS invalide ou vide.");
+      return null;
+    }
+
+    let events = parseIcsEvents(text);
+    if (events.length === 0 && (rawEventCount > 0 || rawFreeBusyCount > 0)) {
+      events = parseIcsEventsFallback(text);
+    }
+
+    const isEmpty = events.length === 0;
+    if (isEmpty) {
+      setStatus(
+        `Calendrier charge: 0 RDV (flux: ${rawEventCount} VEVENT / ${rawFreeBusyCount} VFREEBUSY).`
+      );
+    } else {
+      setStatus(`Calendrier charge: ${events.length} RDV.`);
+    }
+
+    const days = buildDateCandidates(searchDays, includeWeekends);
+    if (days.length === 0) {
+      setStatus("Aucune date a analyser.");
+      return null;
+    }
+
+    const rangeStart = parseDateTime(
+      localDateString(days[0]),
+      DEFAULT_DAY_START
+    );
+    const rangeEnd = parseDateTime(
+      localDateString(days[days.length - 1]),
+      DEFAULT_DAY_END
+    );
+    const windowEvents = filterIcsEventsForRange(
+      events,
+      rangeStart,
+      rangeEnd
+    );
+    const { locationMap, skipped } = await preloadIcsLocations(windowEvents);
+
+    const data: CalendarData = {
+      events,
+      windowEvents,
+      locationMap,
+      rangeStart,
+      rangeEnd,
+      days,
+      skipped,
+      isEmpty,
+    };
+    setCalendarData(data);
+    setSelectedCalendarDay((prev) => prev || days[0]);
+    return data;
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setStatus("Analyse du meilleur créneau...");
@@ -948,20 +1151,11 @@ export default function Home() {
     }
 
     const bufferMin = DEFAULT_BUFFER_MIN;
-    const searchDaysRaw = Number.parseInt(form.searchDays, 10);
-    const searchDays =
-      Number.isFinite(searchDaysRaw) && searchDaysRaw > 0
-        ? searchDaysRaw
-        : DEFAULT_SEARCH_DAYS;
+    const searchDays = parseSearchDays();
     const windowLabel = form.includeWeekends ? "jours" : "jours ouvres";
     const modeLabel =
       form.optimizeMode === "travel" ? "trajets optimises" : "plus tot possible";
     setStatus(`Analyse des ${searchDays} prochains ${windowLabel} (${modeLabel})...`);
-
-    if (!commercialIcsUrl.trim()) {
-      setStatus("Aucun calendrier disponible pour ce commercial.");
-      return;
-    }
 
     try {
       routeSources.current = new Set();
@@ -988,48 +1182,20 @@ export default function Home() {
         return;
       }
 
-      setStatus("Chargement du calendrier ICS...");
-      const res = await fetch(
-        `/api/ics?url=${encodeURIComponent(commercialIcsUrl)}`
+      const calendar = await loadCalendarWindow(
+        searchDays,
+        form.includeWeekends
       );
-      if (!res.ok) {
-        throw new Error("Impossible de charger le lien ICS.");
+      if (!calendar) {
+        return;
       }
-      const text = await res.text();
 
-      const rawEventCount = (text.match(/BEGIN:VEVENT/gi) || []).length;
-      const rawFreeBusyCount = (text.match(/BEGIN:VFREEBUSY/gi) || []).length;
-      if (rawEventCount === 0 && rawFreeBusyCount === 0) {
-        throw new Error("Calendrier ICS invalide ou vide.");
-      }
-      let icsEvents = parseIcsEvents(text);
-      if (icsEvents.length === 0 && (rawEventCount > 0 || rawFreeBusyCount > 0)) {
-        icsEvents = parseIcsEventsFallback(text);
-      }
-      const isEmptyCalendar = icsEvents.length === 0;
-      if (isEmptyCalendar) {
-        setStatus(
-          `Calendrier charge: 0 RDV (flux: ${rawEventCount} VEVENT / ${rawFreeBusyCount} VFREEBUSY).`
-        );
-      } else {
-        setStatus(`Calendrier charge: ${icsEvents.length} RDV.`);
-      }
       const now = new Date();
-      const candidates = buildDateCandidates(searchDays, form.includeWeekends);
-      const rangeStart = parseDateTime(
-        localDateString(candidates[0]),
-        DEFAULT_DAY_START
-      );
-      const rangeEnd = parseDateTime(
-        localDateString(candidates[candidates.length - 1]),
-        DEFAULT_DAY_END
-      );
-      const windowEvents = filterIcsEventsForRange(
-        icsEvents,
-        rangeStart,
-        rangeEnd
-      );
-      const { locationMap, skipped } = await preloadIcsLocations(windowEvents);
+      const candidates = calendar.days;
+      const windowEvents = calendar.windowEvents;
+      const locationMap = calendar.locationMap;
+      const skipped = calendar.skipped;
+      const isEmptyCalendar = calendar.isEmpty;
 
       const slotCandidates: SlotOption[] = [];
 
@@ -1147,6 +1313,96 @@ export default function Home() {
     }
   }
 
+  const reportDays = useMemo(() => {
+    if (!calendarData) return [];
+    return calendarData.days.map((day) => {
+      const dateStr = localDateString(day);
+      const dayStart = parseDateTime(dateStr, DEFAULT_DAY_START);
+      const dayEnd = parseDateTime(dateStr, DEFAULT_DAY_END);
+      const dayEvents = filterIcsEventsForDay(
+        calendarData.windowEvents,
+        dayStart,
+        dayEnd
+      );
+
+      const counts = {
+        training: 0,
+        demo: 0,
+        reseller: 0,
+        other: 0,
+      };
+
+      for (const evt of dayEvents) {
+        const kind = detectEventKind(evt);
+        if (kind === "other") {
+          counts.other += 1;
+        } else {
+          counts[kind] += 1;
+        }
+      }
+
+      const isFull =
+        counts.training >= 4 ||
+        counts.demo >= 2 ||
+        (counts.demo >= 1 && counts.training >= 2);
+
+      let suggestions: Reseller[] = [];
+      if (!isFull) {
+        const dayPostalCodes = new Set<string>();
+        for (const evt of dayEvents) {
+          const locationLabel = resolveEventLocationLabel(evt);
+          for (const code of extractPostalCodes(locationLabel)) {
+            dayPostalCodes.add(code);
+          }
+        }
+        suggestions = activeResellers.filter((reseller) => {
+          const codes = extractPostalCodes(reseller.address);
+          return codes.some((code) => dayPostalCodes.has(code));
+        });
+        if (suggestions.length === 0) {
+          suggestions = activeResellers.slice(0, 3);
+        }
+      }
+
+      return {
+        day,
+        counts,
+        totalEvents: dayEvents.length,
+        isFull,
+        suggestions,
+      };
+    });
+  }, [calendarData, activeResellers]);
+
+  const calendarDays = calendarData?.days || [];
+  const activeCalendarDay = selectedCalendarDay || calendarDays[0] || null;
+  const calendarDayEvents = useMemo(() => {
+    if (!calendarData || !activeCalendarDay) return [];
+    const dateStr = localDateString(activeCalendarDay);
+    const dayStart = parseDateTime(dateStr, DEFAULT_DAY_START);
+    const dayEnd = parseDateTime(dateStr, DEFAULT_DAY_END);
+    return filterIcsEventsForDay(calendarData.windowEvents, dayStart, dayEnd);
+  }, [calendarData, activeCalendarDay]);
+
+  const calendarPoints = useMemo(() => {
+    if (!calendarData) return [];
+    const points: GeoPoint[] = [];
+    for (const evt of calendarDayEvents) {
+      const locationLabel = resolveEventLocationLabel(evt);
+      if (!locationLabel) continue;
+      const point = calendarData.locationMap.get(locationLabel);
+      if (point) {
+        points.push({
+          ...point,
+          label: evt.summary || point.label,
+        });
+      }
+    }
+    return points;
+  }, [calendarData, calendarDayEvents]);
+
+  const mapUrl = useMemo(() => buildStaticMapUrl(calendarPoints), [calendarPoints]);
+
   return (
     <main className="page">
       <div className="topbar">
@@ -1161,195 +1417,460 @@ export default function Home() {
         </p>
       </header>
 
-      <section className="card">
-        <div className="card-title">Commercial</div>
-        <div className="grid">
-          <div className="field">
-            <label>Selection</label>
-            <select
-              value={form.commercial}
-              onChange={(e) =>
-                setForm({
-                  ...form,
-                  commercial: e.target.value as Commercial,
-                })
-              }
-            >
-              {COMMERCIALS.map((item) => (
-                <option key={item.name} value={item.name}>
-                  {item.name}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-        <p className="small" style={{ marginTop: 10 }}>
-          Le calendrier ICS est relie automatiquement au commercial selectionne.
-        </p>
-      </section>
-
-      <section className="card">
-        <div className="card-title">Nouveau RDV</div>
-        <form onSubmit={handleSubmit}>
-          <div className="row" style={{ marginBottom: 12 }}>
-            <span className="badge">
-              Journee: {DEFAULT_DAY_START} - {DEFAULT_DAY_END}
-            </span>
-            <span className="badge">Buffer: {DEFAULT_BUFFER_MIN} min</span>
-            <span className="badge">Depart: {DEFAULT_HOME_ADDRESS}</span>
-          </div>
-          <div className="grid">
-            <div className="field">
-              <label>Type</label>
-              <select
-                value={form.type}
-                onChange={(e) =>
-                  setForm({ ...form, type: e.target.value as VisitType })
-                }
-              >
-                <option value="demo">Demo</option>
-                <option value="training">Training</option>
-                <option value="reseller">Reseller</option>
-              </select>
-            </div>
-            <div className="field">
-              <label>Priorite</label>
-              <select
-                value={form.optimizeMode}
-                onChange={(e) =>
-                  setForm({
-                    ...form,
-                    optimizeMode: e.target.value as FormState["optimizeMode"],
-                  })
-                }
-              >
-                <option value="travel">Optimiser les trajets</option>
-                <option value="earliest">Le plus tot possible</option>
-              </select>
-            </div>
-            <div className="field">
-              <label>Duree (min)</label>
-              <input
-                type="number"
-                min={15}
-                placeholder={`${DURATION_MIN[form.type]}`}
-                value={form.durationMin}
-                onChange={(e) => setForm({ ...form, durationMin: e.target.value })}
-              />
-            </div>
-            <div className="field">
-              <label>Adresse du RDV</label>
-              <input
-                type="text"
-                placeholder="Adresse complète"
-                value={form.appointmentAddress}
-                onChange={(e) =>
-                  setForm({ ...form, appointmentAddress: e.target.value })
-                }
-              />
-            </div>
-            <div className="field">
-              <label>Titre (optionnel)</label>
-              <input
-                type="text"
-                placeholder="Nom client / sujet"
-                value={form.appointmentTitle}
-                onChange={(e) =>
-                  setForm({ ...form, appointmentTitle: e.target.value })
-                }
-              />
-            </div>
-            <div className="field">
-              <label>Jours a analyser</label>
-              <input
-                type="number"
-                min={1}
-                value={form.searchDays}
-                onChange={(e) => setForm({ ...form, searchDays: e.target.value })}
-              />
-            </div>
-          </div>
-
-          <div className="row" style={{ marginTop: 12 }}>
-            <label
-              className="inline"
-              style={{ display: "flex", alignItems: "center", gap: 8 }}
-            >
-              <input
-                type="checkbox"
-                checked={form.includeWeekends}
-                onChange={(e) =>
-                  setForm({ ...form, includeWeekends: e.target.checked })
-                }
-              />
-              Inclure le week-end
-            </label>
-          </div>
-
-          <div className="row" style={{ marginTop: 14 }}>
-            <button className="btn primary" type="submit">
-              Trouver le meilleur créneau
-            </button>
-          </div>
-        </form>
-      </section>
+      <div className="tabs">
+        <button
+          className={`tab ${activeTab === "planner" ? "active" : ""}`}
+          type="button"
+          onClick={() => setActiveTab("planner")}
+        >
+          Accueil
+        </button>
+        <button
+          className={`tab ${activeTab === "report" ? "active" : ""}`}
+          type="button"
+          onClick={() => setActiveTab("report")}
+        >
+          Rapport
+        </button>
+        <button
+          className={`tab ${activeTab === "calendar" ? "active" : ""}`}
+          type="button"
+          onClick={() => setActiveTab("calendar")}
+        >
+          Agenda & Carte
+        </button>
+        <button
+          className={`tab ${activeTab === "resellers" ? "active" : ""}`}
+          type="button"
+          onClick={() => setActiveTab("resellers")}
+        >
+          Revendeurs
+        </button>
+      </div>
 
       <section className="card">
         <div className="card-title">Statut</div>
         <div className="status">{status}</div>
       </section>
 
-      {options.length ? (
-        <section className="card">
-          <div className="card-title">Créneaux proposés</div>
-          {options.map((option, idx) => {
-            const slot = option.slot;
-            return (
-              <div key={`${slot.start.toISOString()}-${idx}`} style={{ marginTop: 16 }}>
-                <div className="small">Option {idx + 1}</div>
-                <div className="result-grid">
-                  <div className="result-card">
-                    <div className="small">Date recommandee</div>
-                    <div style={{ fontSize: 20, fontWeight: 700 }}>
-                      {formatDateLabel(slot.start)}
-                    </div>
-                    <div className="small" style={{ marginTop: 6 }}>
-                      Heure proposee
-                    </div>
-                    <div style={{ fontSize: 22, fontWeight: 700 }}>
-                      {formatHHMM(slot.start)} - {formatHHMM(slot.end)}
-                    </div>
-                    <div className="small">Fuseau: {timezone}</div>
-                  </div>
-                  <div className="result-card">
-                    <div className="small">Trajet estimé</div>
-                    <div style={{ fontSize: 20, fontWeight: 600 }}>
-                      {slot.travelFromPrev} min depuis {slot.prevLabel || "départ"}
-                    </div>
-                    <div className="small">
-                      {slot.travelToNext} min vers {slot.nextLabel || "fin"}
-                    </div>
-                  </div>
-                </div>
-                <div className="row" style={{ marginTop: 10 }}>
-                  <button
-                    className="btn ghost"
-                    type="button"
-                    onClick={() => downloadIcsFile(slot, buildIcsPayload(slot))}
-                  >
-                    Telecharger le fichier .ics
-                  </button>
-                </div>
-                {slot.notes.length ? (
-                  <ul className="note-list">
-                    {slot.notes.map((note, noteIdx) => (
-                      <li key={noteIdx}>{note}</li>
-                    ))}
-                  </ul>
-                ) : null}
+      {activeTab === "planner" ? (
+        <>
+          <section className="card">
+            <div className="card-title">Commercial</div>
+            <div className="grid">
+              <div className="field">
+                <label>Selection</label>
+                <select
+                  value={form.commercial}
+                  onChange={(e) =>
+                    setForm({
+                      ...form,
+                      commercial: e.target.value as Commercial,
+                    })
+                  }
+                >
+                  {COMMERCIALS.map((item) => (
+                    <option key={item.name} value={item.name}>
+                      {item.name}
+                    </option>
+                  ))}
+                </select>
               </div>
-            );
-          })}
+            </div>
+            <p className="small" style={{ marginTop: 10 }}>
+              Le calendrier ICS est relie automatiquement au commercial selectionne.
+            </p>
+          </section>
+
+          <section className="card">
+            <div className="card-title">Nouveau RDV</div>
+            <form onSubmit={handleSubmit}>
+              <div className="row" style={{ marginBottom: 12 }}>
+                <span className="badge">
+                  Journee: {DEFAULT_DAY_START} - {DEFAULT_DAY_END}
+                </span>
+                <span className="badge">Buffer: {DEFAULT_BUFFER_MIN} min</span>
+                <span className="badge">Depart: {DEFAULT_HOME_ADDRESS}</span>
+              </div>
+              <div className="grid">
+                <div className="field">
+                  <label>Type</label>
+                  <select
+                    value={form.type}
+                    onChange={(e) =>
+                      setForm({ ...form, type: e.target.value as VisitType })
+                    }
+                  >
+                    <option value="demo">Demo</option>
+                    <option value="training">Training</option>
+                    <option value="reseller">Reseller</option>
+                  </select>
+                </div>
+                <div className="field">
+                  <label>Priorite</label>
+                  <select
+                    value={form.optimizeMode}
+                    onChange={(e) =>
+                      setForm({
+                        ...form,
+                        optimizeMode: e.target.value as FormState["optimizeMode"],
+                      })
+                    }
+                  >
+                    <option value="travel">Optimiser les trajets</option>
+                    <option value="earliest">Le plus tot possible</option>
+                  </select>
+                </div>
+                <div className="field">
+                  <label>Duree (min)</label>
+                  <input
+                    type="number"
+                    min={15}
+                    placeholder={`${DURATION_MIN[form.type]}`}
+                    value={form.durationMin}
+                    onChange={(e) =>
+                      setForm({ ...form, durationMin: e.target.value })
+                    }
+                  />
+                </div>
+                <div className="field">
+                  <label>Adresse du RDV</label>
+                  <input
+                    type="text"
+                    placeholder="Adresse complète"
+                    value={form.appointmentAddress}
+                    onChange={(e) =>
+                      setForm({ ...form, appointmentAddress: e.target.value })
+                    }
+                  />
+                </div>
+                <div className="field">
+                  <label>Titre (optionnel)</label>
+                  <input
+                    type="text"
+                    placeholder="Nom client / sujet"
+                    value={form.appointmentTitle}
+                    onChange={(e) =>
+                      setForm({ ...form, appointmentTitle: e.target.value })
+                    }
+                  />
+                </div>
+                <div className="field">
+                  <label>Jours a analyser</label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={form.searchDays}
+                    onChange={(e) =>
+                      setForm({ ...form, searchDays: e.target.value })
+                    }
+                  />
+                </div>
+              </div>
+
+              <div className="row" style={{ marginTop: 12 }}>
+                <label
+                  className="inline"
+                  style={{ display: "flex", alignItems: "center", gap: 8 }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={form.includeWeekends}
+                    onChange={(e) =>
+                      setForm({ ...form, includeWeekends: e.target.checked })
+                    }
+                  />
+                  Inclure le week-end
+                </label>
+              </div>
+
+              <div className="row" style={{ marginTop: 14 }}>
+                <button className="btn primary" type="submit">
+                  Trouver le meilleur créneau
+                </button>
+              </div>
+            </form>
+          </section>
+
+          {options.length ? (
+            <section className="card">
+              <div className="card-title">Créneaux proposés</div>
+              {options.map((option, idx) => {
+                const slot = option.slot;
+                return (
+                  <div
+                    key={`${slot.start.toISOString()}-${idx}`}
+                    style={{ marginTop: 16 }}
+                  >
+                    <div className="small">Option {idx + 1}</div>
+                    <div className="result-grid">
+                      <div className="result-card">
+                        <div className="small">Date recommandee</div>
+                        <div style={{ fontSize: 20, fontWeight: 700 }}>
+                          {formatDateLabel(slot.start)}
+                        </div>
+                        <div className="small" style={{ marginTop: 6 }}>
+                          Heure proposee
+                        </div>
+                        <div style={{ fontSize: 22, fontWeight: 700 }}>
+                          {formatHHMM(slot.start)} - {formatHHMM(slot.end)}
+                        </div>
+                        <div className="small">Fuseau: {timezone}</div>
+                      </div>
+                      <div className="result-card">
+                        <div className="small">Trajet estimé</div>
+                        <div style={{ fontSize: 20, fontWeight: 600 }}>
+                          {slot.travelFromPrev} min depuis{" "}
+                          {slot.prevLabel || "départ"}
+                        </div>
+                        <div className="small">
+                          {slot.travelToNext} min vers {slot.nextLabel || "fin"}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="row" style={{ marginTop: 10 }}>
+                      <button
+                        className="btn ghost"
+                        type="button"
+                        onClick={() => downloadIcsFile(slot, buildIcsPayload(slot))}
+                      >
+                        Telecharger le fichier .ics
+                      </button>
+                    </div>
+                    {slot.notes.length ? (
+                      <ul className="note-list">
+                        {slot.notes.map((note, noteIdx) => (
+                          <li key={noteIdx}>{note}</li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </section>
+          ) : null}
+        </>
+      ) : null}
+
+      {activeTab === "report" ? (
+        <section className="card">
+          <div className="card-title">Rapport des journées</div>
+          <div className="row" style={{ marginBottom: 12 }}>
+            <button className="btn ghost" type="button" onClick={handleLoadCalendar}>
+              Analyser le calendrier
+            </button>
+            <span className="badge">
+              Objectif: 4 formations / 2 démos / 1 démo + 2 formations
+            </span>
+          </div>
+          {!calendarData ? (
+            <div className="small">
+              Chargez le calendrier pour obtenir le rapport détaillé.
+            </div>
+          ) : (
+            <div className="report-list">
+              {reportDays.map((report) => (
+                <div key={report.day.toISOString()} className="report-card">
+                  <div className="row">
+                    <div className="report-date">
+                      {formatDateLabel(report.day)}
+                    </div>
+                    <span
+                      className={`pill ${
+                        report.isFull ? "pill-ok" : "pill-warn"
+                      }`}
+                    >
+                      {report.isFull ? "Journee complete" : "A completer"}
+                    </span>
+                  </div>
+                  <div className="row report-metrics">
+                    <span className="chip">Formations: {report.counts.training}</span>
+                    <span className="chip">Demos: {report.counts.demo}</span>
+                    <span className="chip">Revendeurs: {report.counts.reseller}</span>
+                    <span className="chip">Autres: {report.counts.other}</span>
+                    <span className="chip">Total: {report.totalEvents}</span>
+                  </div>
+                  {!report.isFull ? (
+                    <div className="report-suggestions">
+                      <div className="small">Revendeurs suggeres</div>
+                      {report.suggestions.length ? (
+                        <div className="suggestion-list">
+                          {report.suggestions.map((reseller) => (
+                            <div key={reseller.id} className="suggestion-item">
+                              <div>{reseller.name}</div>
+                              <div className="small">{reseller.address}</div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="small">
+                          Aucun revendeur disponible pour ce commercial.
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      ) : null}
+
+      {activeTab === "calendar" ? (
+        <section className="card">
+          <div className="card-title">Agenda & carte</div>
+          <div className="row" style={{ marginBottom: 12 }}>
+            <button className="btn ghost" type="button" onClick={handleLoadCalendar}>
+              Charger l'agenda
+            </button>
+            {calendarData ? (
+              <span className="badge">
+                Fenetre: {formatDateLabel(calendarData.rangeStart)} →{" "}
+                {formatDateLabel(calendarData.rangeEnd)}
+              </span>
+            ) : null}
+          </div>
+          {!calendarData ? (
+            <div className="small">
+              Chargez le calendrier pour afficher l'agenda et la carte.
+            </div>
+          ) : (
+            <div className="calendar-layout">
+              <div className="calendar-days">
+                {calendarDays.map((day) => {
+                  const dateStr = localDateString(day);
+                  const dayStart = parseDateTime(dateStr, DEFAULT_DAY_START);
+                  const dayEnd = parseDateTime(dateStr, DEFAULT_DAY_END);
+                  const count = filterIcsEventsForDay(
+                    calendarData.windowEvents,
+                    dayStart,
+                    dayEnd
+                  ).length;
+                  const isActive =
+                    activeCalendarDay && isSameDay(day, activeCalendarDay);
+                  return (
+                    <button
+                      key={day.toISOString()}
+                      type="button"
+                      className={`day-item ${isActive ? "active" : ""}`}
+                      onClick={() => setSelectedCalendarDay(day)}
+                    >
+                      <div className="day-label">{formatDateLabel(day)}</div>
+                      <div className="small">{count} RDV</div>
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="calendar-map">
+                {mapUrl ? (
+                  <img
+                    className="map-image"
+                    src={mapUrl}
+                    alt="Carte des RDV"
+                  />
+                ) : (
+                  <div className="map-placeholder">
+                    Aucun point geocode pour ce jour.
+                  </div>
+                )}
+                <div className="points-list">
+                  {calendarDayEvents.length ? (
+                    calendarDayEvents.map((evt) => (
+                      <div key={`${evt.summary}-${evt.start.toISOString()}`} className="point-row">
+                        <div>
+                          {formatHHMM(evt.start)} - {formatHHMM(evt.end)}
+                        </div>
+                        <div className="small">
+                          {resolveEventLocationLabel(evt) || "Adresse non renseignee"}
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="small">Aucun RDV pour ce jour.</div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </section>
+      ) : null}
+
+      {activeTab === "resellers" ? (
+        <section className="card">
+          <div className="card-title">Revendeurs</div>
+          <div className="grid">
+            <div className="field">
+              <label>Commercial</label>
+              <select
+                value={form.commercial}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    commercial: e.target.value as Commercial,
+                  })
+                }
+              >
+                {COMMERCIALS.map((item) => (
+                  <option key={item.name} value={item.name}>
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="field">
+              <label>Nom du revendeur</label>
+              <input
+                type="text"
+                placeholder="Nom du revendeur"
+                value={resellerDraft.name}
+                onChange={(e) =>
+                  setResellerDraft({ ...resellerDraft, name: e.target.value })
+                }
+              />
+            </div>
+            <div className="field">
+              <label>Adresse</label>
+              <input
+                type="text"
+                placeholder="Adresse complète"
+                value={resellerDraft.address}
+                onChange={(e) =>
+                  setResellerDraft({ ...resellerDraft, address: e.target.value })
+                }
+              />
+            </div>
+            <div className="field">
+              <label>Notes (optionnel)</label>
+              <input
+                type="text"
+                placeholder="Informations utiles"
+                value={resellerDraft.notes}
+                onChange={(e) =>
+                  setResellerDraft({ ...resellerDraft, notes: e.target.value })
+                }
+              />
+            </div>
+          </div>
+          <div className="row" style={{ marginTop: 12 }}>
+            <button className="btn primary" type="button" onClick={handleAddReseller}>
+              Ajouter revendeur
+            </button>
+          </div>
+          <div className="reseller-list">
+            {activeResellers.length ? (
+              activeResellers.map((reseller) => (
+                <div key={reseller.id} className="reseller-item">
+                  <div className="reseller-name">{reseller.name}</div>
+                  <div className="small">{reseller.address}</div>
+                  {reseller.notes ? (
+                    <div className="small">{reseller.notes}</div>
+                  ) : null}
+                </div>
+              ))
+            ) : (
+              <div className="small">Aucun revendeur enregistre.</div>
+            )}
+          </div>
         </section>
       ) : null}
     </main>

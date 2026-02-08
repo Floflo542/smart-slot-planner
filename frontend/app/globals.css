@@ -157,6 +157,30 @@ label.inline {
   align-items: center;
 }
 
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.tab {
+  border: 1px solid var(--border);
+  background: #0c0c0c;
+  color: var(--muted);
+  padding: 8px 16px;
+  border-radius: 999px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.tab.active {
+  background: var(--accent);
+  color: #0b0b0b;
+  border-color: transparent;
+  box-shadow: 0 10px 24px rgba(249, 115, 22, 0.3);
+}
+
 .btn {
   border: none;
   border-radius: 999px;
@@ -227,6 +251,156 @@ label.inline {
   color: var(--muted);
 }
 
+.report-list {
+  display: grid;
+  gap: 12px;
+}
+
+.report-card {
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 14px;
+  background: #0d0f12;
+  display: grid;
+  gap: 10px;
+}
+
+.report-date {
+  font-weight: 700;
+  font-size: 16px;
+}
+
+.report-metrics {
+  gap: 8px;
+}
+
+.pill {
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.pill-ok {
+  background: rgba(34, 211, 238, 0.15);
+  color: #67e8f9;
+}
+
+.pill-warn {
+  background: rgba(249, 115, 22, 0.16);
+  color: #fdba74;
+}
+
+.chip {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--muted);
+  background: #0b0b0b;
+}
+
+.report-suggestions {
+  display: grid;
+  gap: 8px;
+}
+
+.suggestion-list {
+  display: grid;
+  gap: 8px;
+}
+
+.suggestion-item {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 8px 10px;
+  background: #0b0b0b;
+}
+
+.calendar-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) 2fr;
+  gap: 16px;
+}
+
+.calendar-days {
+  display: grid;
+  gap: 10px;
+  max-height: 520px;
+  overflow: auto;
+  padding-right: 6px;
+}
+
+.day-item {
+  border: 1px solid var(--border);
+  background: #0b0b0b;
+  color: var(--ink);
+  border-radius: 14px;
+  padding: 10px 12px;
+  text-align: left;
+  display: grid;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.day-item.active {
+  border-color: var(--accent);
+  box-shadow: 0 12px 30px rgba(249, 115, 22, 0.2);
+}
+
+.day-label {
+  font-weight: 600;
+}
+
+.calendar-map {
+  display: grid;
+  gap: 12px;
+}
+
+.map-image {
+  width: 100%;
+  border-radius: 18px;
+  border: 1px solid var(--border);
+  object-fit: cover;
+}
+
+.map-placeholder {
+  border: 1px dashed var(--border);
+  border-radius: 16px;
+  padding: 24px;
+  color: var(--muted);
+}
+
+.points-list {
+  display: grid;
+  gap: 8px;
+}
+
+.point-row {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 8px 10px;
+  background: #0b0b0b;
+}
+
+.reseller-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.reseller-item {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: #0b0b0b;
+}
+
+.reseller-name {
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
 .small {
   font-size: 12px;
   color: var(--muted);
@@ -234,6 +408,10 @@ label.inline {
 
 @media (max-width: 900px) {
   .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .calendar-layout {
     grid-template-columns: 1fr;
   }
 }
