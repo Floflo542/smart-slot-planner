@@ -69,10 +69,24 @@ function resolveEventLocationLabel(event: IcsEvent) {
     );
   };
 
-  const base =
+  const extractAddress = (value: string) => {
+    if (!value) return "";
+    const parenMatch = value.match(/\(([^)]+)\)/);
+    if (parenMatch && looksLikeAddress(parenMatch[1])) {
+      return parenMatch[1].trim();
+    }
+    const parts = value.split(/ - | — | \| /);
+    for (const part of parts) {
+      if (looksLikeAddress(part)) return part.trim();
+    }
+    return value.trim();
+  };
+
+  const rawBase =
     locationRaw ||
     summaryOverride ||
     (looksLikeAddress(summaryRaw) ? summaryRaw : "");
+  const base = extractAddress(rawBase);
   if (!base) return "";
   const normalized = normalizeLocationKey(base);
   return (
