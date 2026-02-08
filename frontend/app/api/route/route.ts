@@ -1,13 +1,6 @@
 import { NextResponse } from "next/server";
 
-const DISTANCEMATRIX_DISTANCE_BASE_URL =
-  process.env.DISTANCEMATRIX_DISTANCE_BASE_URL ||
-  process.env.DISTANCEMATRIX_BASE_URL ||
-  "https://api.distancematrix.ai";
-const DISTANCEMATRIX_DISTANCE_KEY =
-  process.env.DISTANCEMATRIX_DISTANCE_KEY ||
-  process.env.DISTANCEMATRIX_KEY ||
-  "";
+const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN || "";
 
 function parseLatLon(value: string | null) {
   if (!value) return null;
@@ -19,9 +12,9 @@ function parseLatLon(value: string | null) {
 }
 
 export async function GET(req: Request) {
-  if (!DISTANCEMATRIX_DISTANCE_KEY) {
+  if (!MAPBOX_TOKEN) {
     return NextResponse.json(
-      { ok: false, error: "DISTANCEMATRIX_DISTANCE_KEY manquant" },
+      { ok: false, error: "MAPBOX_TOKEN manquant" },
       { status: 500 }
     );
   }
@@ -42,41 +35,33 @@ export async function GET(req: Request) {
 
   try {
     const params = new URLSearchParams({
-      origins: `${from.lat},${from.lon}`,
-      destinations: `${to.lat},${to.lon}`,
-      key: DISTANCEMATRIX_DISTANCE_KEY,
+      access_token: MAPBOX_TOKEN,
+      overview: "false",
+      geometries: "geojson",
     });
+
     if (departAt) {
-      const dep = new Date(departAt);
-      if (!Number.isNaN(dep.getTime())) {
-        params.set("departure_time", Math.floor(dep.getTime() / 1000).toString());
-      }
+      params.set("depart_at", departAt);
     }
 
-    const url = `${DISTANCEMATRIX_DISTANCE_BASE_URL}/maps/api/distancematrix/json?${params.toString()}`;
+    const url = `https://api.mapbox.com/directions/v5/mapbox/driving-traffic/${from.lon},${from.lat};${to.lon},${to.lat}?${params.toString()}`;
     const upstream = await fetch(url, {
       signal: controller.signal,
       cache: "no-store",
     });
 
     const json = await upstream.json();
-    const element = json?.rows?.[0]?.elements?.[0];
-    if (!upstream.ok || json?.status !== "OK" || element?.status !== "OK") {
+    if (!upstream.ok || !json?.routes?.length) {
       return NextResponse.json(
-        {
-          ok: false,
-          error: `Aucune route disponible (DistanceMatrix)${json?.status ? `: ${json.status}` : ""}${element?.status ? `: ${element.status}` : ""}`,
-        },
+        { ok: false, error: "Aucune route disponible (Mapbox)" },
         { status: 502 }
       );
     }
 
-    const durationSec = Number(
-      element?.duration_in_traffic?.value ?? element?.duration?.value
-    );
+    const durationSec = Number(json.routes[0].duration);
     if (!Number.isFinite(durationSec)) {
       return NextResponse.json(
-        { ok: false, error: "Duree invalide (DistanceMatrix)" },
+        { ok: false, error: "Duree invalide (Mapbox)" },
         { status: 502 }
       );
     }
@@ -85,7 +70,7 @@ export async function GET(req: Request) {
       ok: true,
       duration_sec: durationSec,
       duration_min: durationSec / 60,
-      provider: "distancematrix",
+      provider: "mapbox",
     });
   } catch {
     return NextResponse.json(
