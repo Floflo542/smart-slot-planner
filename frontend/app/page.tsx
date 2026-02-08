@@ -235,6 +235,8 @@ type ReportItem = {
   };
   totalEvents: number;
   isFull: boolean;
+  progress: number;
+  hasAllDay: boolean;
   suggestion: ReportSuggestion | null;
 };
 
@@ -882,6 +884,17 @@ async function findBestSlot(params: {
   return best;
 }
 
+function computeProgress(counts: {
+  training: number;
+  demo: number;
+}) {
+  const ratioTraining = counts.training / 4;
+  const ratioDemo = counts.demo / 2;
+  const ratioMix = counts.demo >= 1 ? counts.training / 2 : 0;
+  const progress = Math.max(ratioTraining, ratioDemo, ratioMix);
+  return Math.min(100, Math.max(0, Math.round(progress * 100)));
+}
+
 export default function Home() {
   const [status, setStatus] = useState("Prêt.");
   const [options, setOptions] = useState<SlotOption[]>([]);
@@ -1091,6 +1104,7 @@ export default function Home() {
         reseller: 0,
         other: 0,
       };
+      const hasAllDay = dayEvents.some((evt) => evt.isAllDay);
 
       for (const evt of dayEvents) {
         const kind = detectEventKind(evt);
@@ -1102,9 +1116,11 @@ export default function Home() {
       }
 
       const isFull =
+        hasAllDay ||
         counts.training >= 4 ||
         counts.demo >= 2 ||
         (counts.demo >= 1 && counts.training >= 2);
+      const progress = hasAllDay ? 100 : computeProgress(counts);
 
       let suggestion: ReportSuggestion | null = null;
 
@@ -1217,6 +1233,8 @@ export default function Home() {
         counts,
         totalEvents: dayEvents.length,
         isFull,
+        progress,
+        hasAllDay,
         suggestion,
       });
     }
@@ -2051,13 +2069,16 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
                     <div className="report-date">
                       {formatDateLabel(report.day)}
                     </div>
-                    <span
-                      className={`pill ${
-                        report.isFull ? "pill-ok" : "pill-warn"
-                      }`}
-                    >
-                      {report.isFull ? "Journee complete" : "A completer"}
-                    </span>
+                    <div className="progress">
+                      <div className="small">Progression</div>
+                      <div className="progress-bar">
+                        <div
+                          className="progress-fill"
+                          style={{ width: `${report.progress}%` }}
+                        />
+                      </div>
+                      <div className="small">{report.progress}%</div>
+                    </div>
                   </div>
                   <div className="row report-metrics">
                     <span className="chip">Formations: {report.counts.training}</span>
