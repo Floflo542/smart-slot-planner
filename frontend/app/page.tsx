@@ -707,18 +707,47 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
       if (candidate) attempts.add(candidate);
     };
 
+    const expandAddress = (value: string) => {
+      const variants = new Set<string>();
+      const replacements: Array<[RegExp, string]> = [
+        [/\bChau\.?\b/gi, "Chaussée"],
+        [/\bChaus\.?\b/gi, "Chaussée"],
+        [/\bCh\.\b/gi, "Chaussée"],
+        [/\bAv\.?\b/gi, "Avenue"],
+        [/\bBd\.?\b/gi, "Boulevard"],
+        [/\bBld\.?\b/gi, "Boulevard"],
+        [/\bRte\.?\b/gi, "Route"],
+        [/\bChem\.?\b/gi, "Chemin"],
+      ];
+      let expanded = value;
+      for (const [regex, replacement] of replacements) {
+        expanded = expanded.replace(regex, replacement);
+      }
+      if (expanded !== value) variants.add(expanded);
+      return variants;
+    };
+
     addAttempt(trimmed);
+    for (const variant of expandAddress(trimmed)) {
+      addAttempt(variant);
+    }
 
     const withCommaPostal = trimmed.replace(
       /(\S)\s+(\d{4})\s+/,
       "$1, $2 "
     );
     addAttempt(withCommaPostal);
+    for (const variant of expandAddress(withCommaPostal)) {
+      addAttempt(variant);
+    }
 
     const hasCountry = /belgique|belgium/i.test(trimmed);
     if (!hasCountry) {
       addAttempt(`${withCommaPostal}, Belgique`);
       addAttempt(`${trimmed}, Belgique`);
+      for (const variant of expandAddress(withCommaPostal)) {
+        addAttempt(`${variant}, Belgique`);
+      }
     }
 
     const postalMatch = trimmed.match(/(\d{4})\s+(.+)/);

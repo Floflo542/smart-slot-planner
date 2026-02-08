@@ -31,6 +31,7 @@ export async function GET(req: Request) {
     address: q,
     key: DISTANCEMATRIX_GEOCODE_KEY,
     language: "fr",
+    region: "be",
   });
   const url = `https://api.distancematrix.ai/maps/api/geocode/json?${params.toString()}`;
 
