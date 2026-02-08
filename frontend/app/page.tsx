@@ -1736,7 +1736,12 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
     return points;
   }, [calendarData, calendarDayEvents]);
 
-  const mapUrl = useMemo(() => buildStaticMapUrl(calendarPoints), [calendarPoints]);
+  const mapUrl = useMemo(() => {
+    const base = buildStaticMapUrl(calendarPoints);
+    if (!base) return null;
+    const dayTag = activeCalendarDay ? localDateString(activeCalendarDay) : "na";
+    return `${base}&t=${encodeURIComponent(dayTag)}`;
+  }, [calendarPoints, activeCalendarDay]);
 
   useEffect(() => {
     setMapError(false);
@@ -2155,6 +2160,9 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
                 })}
               </div>
               <div className="calendar-map">
+                <div className="small" style={{ marginBottom: 8 }}>
+                  Points geocodes: {calendarPoints.length}
+                </div>
                 {mapUrl && !mapError ? (
                   <img
                     className="map-image"
