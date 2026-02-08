@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
 
+const DISTANCEMATRIX_DISTANCE_BASE_URL =
+  process.env.DISTANCEMATRIX_DISTANCE_BASE_URL ||
+  process.env.DISTANCEMATRIX_BASE_URL ||
+  "https://api.distancematrix.ai";
 const DISTANCEMATRIX_DISTANCE_KEY =
   process.env.DISTANCEMATRIX_DISTANCE_KEY ||
   process.env.DISTANCEMATRIX_KEY ||
@@ -49,7 +53,7 @@ export async function GET(req: Request) {
       }
     }
 
-    const url = `https://api.distancematrix.ai/maps/api/distancematrix/json?${params.toString()}`;
+    const url = `${DISTANCEMATRIX_DISTANCE_BASE_URL}/maps/api/distancematrix/json?${params.toString()}`;
     const upstream = await fetch(url, {
       signal: controller.signal,
       cache: "no-store",
@@ -59,7 +63,10 @@ export async function GET(req: Request) {
     const element = json?.rows?.[0]?.elements?.[0];
     if (!upstream.ok || json?.status !== "OK" || element?.status !== "OK") {
       return NextResponse.json(
-        { ok: false, error: "Aucune route disponible (DistanceMatrix)" },
+        {
+          ok: false,
+          error: `Aucune route disponible (DistanceMatrix)${json?.status ? `: ${json.status}` : ""}${element?.status ? `: ${element.status}` : ""}`,
+        },
         { status: 502 }
       );
     }

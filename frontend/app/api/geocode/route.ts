@@ -3,6 +3,10 @@ import { NextResponse } from "next/server";
 const USER_AGENT =
   process.env.GEOCODE_USER_AGENT ||
   "smart-slot-planner/1.0 (geocode; contact: dev@example.com)";
+const DISTANCEMATRIX_GEOCODE_BASE_URL =
+  process.env.DISTANCEMATRIX_GEOCODE_BASE_URL ||
+  process.env.DISTANCEMATRIX_BASE_URL ||
+  "https://api.distancematrix.ai";
 const DISTANCEMATRIX_GEOCODE_KEY =
   process.env.DISTANCEMATRIX_GEOCODE_KEY ||
   process.env.DISTANCEMATRIX_KEY ||
@@ -33,7 +37,7 @@ export async function GET(req: Request) {
     language: "fr",
     region: "be",
   });
-  const url = `https://api.distancematrix.ai/maps/api/geocode/json?${params.toString()}`;
+  const url = `${DISTANCEMATRIX_GEOCODE_BASE_URL}/maps/api/geocode/json?${params.toString()}`;
 
   const upstream = await fetch(url, {
     headers: {
@@ -56,7 +60,7 @@ export async function GET(req: Request) {
     return NextResponse.json(
       {
         ok: false,
-        error: `Geocodage indisponible (${upstream.status})${json?.error_message ? `: ${json.error_message}` : ""}`,
+        error: `Geocodage indisponible (${upstream.status})${json?.status ? `: ${json.status}` : ""}${json?.error_message ? `: ${json.error_message}` : ""}`,
       },
       { status: 502 }
     );
