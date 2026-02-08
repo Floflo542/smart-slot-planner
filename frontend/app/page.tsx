@@ -808,6 +808,19 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
     });
   }
 
+  function filterIcsEventsForRange(
+    events: IcsEvent[],
+    rangeStart: Date,
+    rangeEnd: Date
+  ) {
+    return events.filter((evt) => {
+      if (evt.isAllDay) {
+        return evt.start <= rangeEnd && evt.end >= rangeStart;
+      }
+      return evt.end > rangeStart && evt.start < rangeEnd;
+    });
+  }
+
   async function buildFixedEventsFromIcs(
     events: IcsEvent[],
     dayStart: Date,
@@ -935,10 +948,22 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
       } else {
         setStatus(`Calendrier charge: ${icsEvents.length} RDV.`);
       }
-      const { locationMap, skipped } = await preloadIcsLocations(icsEvents);
-
       const now = new Date();
       const candidates = buildDateCandidates(searchDays, form.includeWeekends);
+      const rangeStart = parseDateTime(
+        localDateString(candidates[0]),
+        DEFAULT_DAY_START
+      );
+      const rangeEnd = parseDateTime(
+        localDateString(candidates[candidates.length - 1]),
+        DEFAULT_DAY_END
+      );
+      const windowEvents = filterIcsEventsForRange(
+        icsEvents,
+        rangeStart,
+        rangeEnd
+      );
+      const { locationMap, skipped } = await preloadIcsLocations(windowEvents);
 
       const slotCandidates: SlotOption[] = [];
 
@@ -955,9 +980,9 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
           continue;
         }
 
-        const dayEvents = filterIcsEventsForDay(icsEvents, dayStart, dayEnd);
+        const dayEvents = filterIcsEventsForDay(windowEvents, dayStart, dayEnd);
         const fixed = await buildFixedEventsFromIcs(
-          icsEvents,
+          windowEvents,
           dayStart,
           dayEnd,
           locationMap
