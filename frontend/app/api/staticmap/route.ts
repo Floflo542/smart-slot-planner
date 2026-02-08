@@ -63,29 +63,11 @@ export async function GET(req: Request) {
     );
   }
 
-  const zoom = guessMapZoom(points);
-  const avgLat = points.reduce((sum, p) => sum + p.lat, 0) / points.length;
-  const avgLon = points.reduce((sum, p) => sum + p.lon, 0) / points.length;
+  const overlay = points
+    .map((p) => `pin-l+ff4d4d(${p.lon},${p.lat})`)
+    .join(",");
 
-  const features = points.map((p) => ({
-    type: "Feature",
-    geometry: {
-      type: "Point",
-      coordinates: [p.lon, p.lat],
-    },
-    properties: {
-      "marker-color": "#ff4d4d",
-      "marker-size": "large",
-    },
-  }));
-  const overlay = `geojson(${encodeURIComponent(
-    JSON.stringify({
-      type: "FeatureCollection",
-      features,
-    })
-  )})`;
-
-  const url = `https://api.mapbox.com/styles/v1/mapbox/streets-v12/static/${overlay}/${avgLon},${avgLat},${zoom}/${size}?access_token=${encodeURIComponent(
+  const url = `https://api.mapbox.com/styles/v1/mapbox/streets-v12/static/${overlay}/auto/${size}?access_token=${encodeURIComponent(
     MAPBOX_TOKEN
   )}&logo=false&attribution=false`;
 
