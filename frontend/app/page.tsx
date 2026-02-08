@@ -236,10 +236,6 @@ type CalendarData = {
   isEmpty: boolean;
 };
 
-const DEFAULT_RESELLERS: Record<Commercial, Reseller[]> = {
-  "Florian Monoyer": [],
-};
-
 type FormState = {
   commercial: Commercial;
   appointmentAddress: string;
@@ -856,10 +852,9 @@ export default function Home() {
   const [selectedCalendarDay, setSelectedCalendarDay] = useState<Date | null>(
     null
   );
+  const [resellers, setResellers] = useState<Reseller[]>([]);
+  const [resellersLoading, setResellersLoading] = useState(false);
   const [mapError, setMapError] = useState(false);
-  const [resellersByCommercial, setResellersByCommercial] = useState(
-    DEFAULT_RESELLERS
-  );
   const [resellerDraft, setResellerDraft] = useState({
     name: "",
     address: "",
@@ -886,10 +881,7 @@ export default function Home() {
   );
   const commercialIcsUrl =
     COMMERCIALS.find((item) => item.name === form.commercial)?.icsUrl || "";
-  const activeResellers = useMemo(
-    () => resellersByCommercial[form.commercial] || [],
-    [resellersByCommercial, form.commercial]
-  );
+  const activeResellers = resellers;
 
   const buildIcsPayload = (slot: BestSlot): IcsPayload => {
     const subject =
@@ -959,7 +951,40 @@ export default function Home() {
     await loadCalendarWindow(searchDays, form.includeWeekends);
   };
 
-  const buildReportItems = async (calendar: CalendarData) => {
+  const loadResellers = async (commercial: Commercial) => {
+    setResellersLoading(true);
+    try {
+      const res = await fetch(
+        `/api/resellers?commercial=${encodeURIComponent(commercial)}`
+      );
+      const json = await res.json();
+      if (!res.ok || !json?.ok) {
+        setStatus(json?.error || "Impossible de charger les revendeurs.");
+        setResellers([]);
+        return [];
+      }
+      const items = Array.isArray(json.items) ? json.items : [];
+      setResellers(items);
+      return items;
+    } catch {
+      setStatus("Impossible de charger les revendeurs.");
+      setResellers([]);
+      return [];
+    } finally {
+      setResellersLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === "resellers") {
+      loadResellers(form.commercial);
+    }
+  }, [activeTab, form.commercial]);
+
+  const buildReportItems = async (
+    calendar: CalendarData,
+    resellersForReport: Reseller[]
+  ) => {
     const items: ReportItem[] = [];
     const resellerPoints = new Map<string, GeoPoint | null>();
     let homePoint: GeoPoint = {
@@ -974,12 +999,12 @@ export default function Home() {
       // fallback to default coords
     }
 
-    if (activeResellers.length) {
+    if (resellersForReport.length) {
       let done = 0;
-      for (const reseller of activeResellers) {
+      for (const reseller of resellersForReport) {
         done += 1;
         setStatus(
-          `Geocodage des revendeurs (${done}/${activeResellers.length})...`
+          `Geocodage des revendeurs (${done}/${resellersForReport.length})...`
         );
         try {
           const point = await geocodeAddress(reseller.address);
@@ -1044,7 +1069,7 @@ export default function Home() {
           }
         }
 
-        const resellerCandidates = activeResellers
+        const resellerCandidates = resellersForReport
           .map((reseller) => ({
             reseller,
             point: resellerPoints.get(reseller.id) || null,
@@ -1146,7 +1171,8 @@ export default function Home() {
     const searchDays = parseSearchDays();
     const calendar = await loadCalendarWindow(searchDays, form.includeWeekends);
     if (!calendar) return;
-    const items = await buildReportItems(calendar);
+    const resellersForReport = await loadResellers(form.commercial);
+    const items = await buildReportItems(calendar, resellersForReport);
     setReportItems(items);
     setStatus("Rapport mis a jour.");
   };
@@ -1158,19 +1184,30 @@ export default function Home() {
       setStatus("Nom ou adresse du revendeur manquante.");
       return;
     }
-    const entry: Reseller = {
-      id: crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`,
+    const payload = {
+      commercial: form.commercial,
       name,
       address,
       notes: resellerDraft.notes.trim() || undefined,
     };
-
-    setResellersByCommercial((prev) => ({
-      ...prev,
-      [form.commercial]: [...(prev[form.commercial] || []), entry],
-    }));
-    setResellerDraft({ name: "", address: "", notes: "" });
-    setStatus("Revendeur ajoute.");
+    setStatus("Enregistrement du revendeur...");
+    fetch("/api/resellers", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    })
+      .then(async (res) => {
+        const json = await res.json();
+        if (!res.ok || !json?.ok) {
+          throw new Error(json?.error || "Erreur lors de l'ajout.");
+        }
+        setResellerDraft({ name: "", address: "", notes: "" });
+        setStatus("Revendeur ajoute.");
+        await loadResellers(form.commercial);
+      })
+      .catch((err) => {
+        setStatus(`Erreur: ${err?.message || String(err)}`);
+      });
   };
 
 async function geocodeAddress(label: string): Promise<GeoPoint> {
@@ -2182,7 +2219,9 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
             </button>
           </div>
           <div className="reseller-list">
-            {activeResellers.length ? (
+            {resellersLoading ? (
+              <div className="small">Chargement des revendeurs...</div>
+            ) : activeResellers.length ? (
               activeResellers.map((reseller) => (
                 <div key={reseller.id} className="reseller-item">
                   <div className="reseller-name">{reseller.name}</div>
