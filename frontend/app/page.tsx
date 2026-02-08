@@ -311,6 +311,14 @@ function parseIcsDuration(value: string) {
   return Number.isFinite(totalMs) && totalMs > 0 ? totalMs : null;
 }
 
+function unescapeIcsText(value: string) {
+  return value
+    .replace(/\\\\/g, "\\")
+    .replace(/\\n/gi, "\n")
+    .replace(/\\,/g, ",")
+    .replace(/\\;/g, ";");
+}
+
 function parseFreeBusyRanges(value: string): IcsEvent[] {
   const out: IcsEvent[] = [];
   const ranges = value.split(",");
@@ -414,9 +422,9 @@ function parseIcsEvents(text: string): IcsEvent[] {
     if (!current) continue;
 
     if (prop === "SUMMARY") {
-      current.summary = value;
+      current.summary = unescapeIcsText(value);
     } else if (prop === "LOCATION") {
-      current.location = value;
+      current.location = unescapeIcsText(value);
     } else if (prop === "DTSTART") {
       const isDateOnly = params.includes("VALUE=DATE") || value.length === 8;
       current.start = parseIcsDate(value, isDateOnly);
@@ -448,8 +456,8 @@ function parseIcsEventsFallback(text: string): IcsEvent[] {
     if (endIdx === -1) continue;
     const body = block.slice(0, endIdx);
 
-    const summary = extractProp(body, "SUMMARY");
-    const location = extractProp(body, "LOCATION");
+    const summary = unescapeIcsText(extractProp(body, "SUMMARY"));
+    const location = unescapeIcsText(extractProp(body, "LOCATION"));
     const dtstart = extractProp(body, "DTSTART");
     const dtend = extractProp(body, "DTEND");
     const duration = extractProp(body, "DURATION");
