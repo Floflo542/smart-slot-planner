@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-const ORS_API_KEY = process.env.ORS_API_KEY || "";
+const GRAPHHOPPER_API_KEY = process.env.GRAPHHOPPER_API_KEY || "";
 
 function parseLatLon(value: string | null) {
   if (!value) return null;
@@ -12,9 +12,9 @@ function parseLatLon(value: string | null) {
 }
 
 export async function GET(req: Request) {
-  if (!ORS_API_KEY) {
+  if (!GRAPHHOPPER_API_KEY) {
     return NextResponse.json(
-      { ok: false, error: "ORS_API_KEY manquant" },
+      { ok: false, error: "GRAPHHOPPER_API_KEY manquant" },
       { status: 500 }
     );
   }
@@ -33,31 +33,28 @@ export async function GET(req: Request) {
   const timeout = setTimeout(() => controller.abort(), 10000);
 
   try {
-    const orsUrl =
-      "https://api.openrouteservice.org/v2/directions/driving-car";
-    const upstream = await fetch(orsUrl, {
-      method: "POST",
-      headers: {
-        Authorization: ORS_API_KEY,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        coordinates: [
-          [from.lon, from.lat],
-          [to.lon, to.lat],
-        ],
-      }),
+    const params = new URLSearchParams({
+      key: GRAPHHOPPER_API_KEY,
+      profile: "car",
+      points_encoded: "false",
+      locale: "fr",
+    });
+    params.append("point", `${from.lat},${from.lon}`);
+    params.append("point", `${to.lat},${to.lon}`);
+
+    const ghUrl = `https://graphhopper.com/api/1/route?${params.toString()}`;
+    const upstream = await fetch(ghUrl, {
+      method: "GET",
       signal: controller.signal,
       cache: "no-store",
     });
 
     const json = await upstream.json();
-    const durationSec = Number(
-      json?.features?.[0]?.properties?.summary?.duration
-    );
+    const durationMs = Number(json?.paths?.[0]?.time);
+    const durationSec = durationMs / 1000;
     if (!upstream.ok || !Number.isFinite(durationSec)) {
       return NextResponse.json(
-        { ok: false, error: "Aucune route disponible (OpenRouteService)" },
+        { ok: false, error: "Aucune route disponible (GraphHopper)" },
         { status: 502 }
       );
     }
@@ -66,7 +63,7 @@ export async function GET(req: Request) {
       ok: true,
       duration_sec: durationSec,
       duration_min: durationSec / 60,
-      provider: "ors",
+      provider: "graphhopper",
     });
   } catch {
     return NextResponse.json(
