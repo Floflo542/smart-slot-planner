@@ -629,6 +629,7 @@ export default function Home() {
 
   const geocodeCache = useRef(new Map<string, GeoPoint | null>());
   const routeCache = useRef(new Map<string, number>());
+  const routeSources = useRef(new Set<string>());
 
   const timezone = useMemo(
     () => Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -676,14 +677,19 @@ export default function Home() {
           Math.round(json.duration_min * TRAFFIC_MARGIN)
         );
         routeCache.current.set(key, minutes);
+        routeSources.current.add(json?.provider ? String(json.provider) : "mapbox");
         return minutes;
       }
     } catch {
       // ignore and fallback below
     }
 
-    const fallback = travelMinutes(a, b, DEFAULT_AVG_SPEED_KMH);
+    const fallback = Math.max(
+      1,
+      Math.round(travelMinutes(a, b, DEFAULT_AVG_SPEED_KMH) * TRAFFIC_MARGIN)
+    );
     routeCache.current.set(key, fallback);
+    routeSources.current.add("estimation");
     return fallback;
   };
 
@@ -879,6 +885,7 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
     }
 
     try {
+      routeSources.current = new Set();
       let home: GeoPoint;
       let appointment: GeoPoint;
       let homeNote: string | null = null;
@@ -1009,6 +1016,11 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
       const buildNotes = (candidate: SlotOption) => {
         const notes: string[] = [];
         notes.push("Source calendrier: lien ICS.");
+        if (routeSources.current.size > 0) {
+          notes.push(
+            `Trajets: ${Array.from(routeSources.current).join(" + ")}.`
+          );
+        }
         if (isEmptyCalendar) {
           notes.push(
             "Aucun RDV detecte dans le calendrier ICS (planning base sur un agenda vide)."
