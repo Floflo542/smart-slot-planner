@@ -113,21 +113,14 @@ function guessMapZoom(points: GeoPoint[]) {
 function buildStaticMapUrl(points: GeoPoint[]) {
   if (!points.length) return null;
   const limited = points.slice(0, MAX_MAP_MARKERS);
-  const zoom = guessMapZoom(limited);
-  const avgLat =
-    limited.reduce((sum, p) => sum + p.lat, 0) / limited.length;
-  const avgLon =
-    limited.reduce((sum, p) => sum + p.lon, 0) / limited.length;
-  const markers = limited
-    .map((point) => `${point.lat},${point.lon},red-pushpin`)
+  const payload = limited
+    .map((point) => `${point.lat},${point.lon}`)
     .join("|");
   const params = new URLSearchParams({
-    center: `${avgLat},${avgLon}`,
-    zoom: String(zoom),
+    points: payload,
     size: "900x420",
-    markers,
   });
-  return `https://staticmap.openstreetmap.de/staticmap.php?${params.toString()}`;
+  return `/api/staticmap?${params.toString()}`;
 }
 
 const MAX_GEOCODE_LOCATIONS = Number.POSITIVE_INFINITY;
