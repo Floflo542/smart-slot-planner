@@ -930,6 +930,10 @@ export default function Home() {
       created_at: string;
     }>
   >([]);
+  const [adminPasswordDraft, setAdminPasswordDraft] = useState({
+    userId: "",
+    password: "",
+  });
 
   const [form, setForm] = useState<FormState>({
     appointmentAddress: "",
@@ -1429,6 +1433,48 @@ export default function Home() {
       setAdminUsers(json.items || []);
     } catch (err: any) {
       setStatus(err?.message || "Impossible de charger les comptes.");
+    }
+  };
+
+  const handleAdminResetLink = async (userId: string) => {
+    try {
+      const res = await fetch("/api/admin/users", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "reset_link", user_id: userId }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json?.ok) {
+        setStatus(json?.error || "Generation impossible.");
+        return;
+      }
+      if (json.reset_link) {
+        setStatus(`Lien reset: ${json.reset_link}`);
+      }
+    } catch (err: any) {
+      setStatus(err?.message || "Generation impossible.");
+    }
+  };
+
+  const handleAdminSetPassword = async (userId: string, password: string) => {
+    try {
+      const res = await fetch("/api/admin/users", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "set_password",
+          user_id: userId,
+          new_password: password,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json?.ok) {
+        setStatus(json?.error || "Mise a jour impossible.");
+        return;
+      }
+      setStatus("Mot de passe mis a jour.");
+    } catch (err: any) {
+      setStatus(err?.message || "Mise a jour impossible.");
     }
   };
 
@@ -2779,6 +2825,37 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
                       <div className="small">{entry.ics_url}</div>
                       <div className="small">
                         Cree le {new Date(entry.created_at).toLocaleDateString("fr-FR")}
+                      </div>
+                      <div className="row" style={{ marginTop: 10 }}>
+                        <button
+                          className="btn ghost"
+                          type="button"
+                          onClick={() => handleAdminResetLink(entry.id)}
+                        >
+                          Generer lien reset
+                        </button>
+                      </div>
+                      <div className="row" style={{ marginTop: 10 }}>
+                        <input
+                          type="password"
+                          placeholder="Nouveau mot de passe"
+                          value={entry.id === adminPasswordDraft.userId ? adminPasswordDraft.password : ""}
+                          onChange={(e) =>
+                            setAdminPasswordDraft({
+                              userId: entry.id,
+                              password: e.target.value,
+                            })
+                          }
+                        />
+                        <button
+                          className="btn ghost"
+                          type="button"
+                          onClick={() =>
+                            handleAdminSetPassword(entry.id, adminPasswordDraft.password)
+                          }
+                        >
+                          Modifier mot de passe
+                        </button>
                       </div>
                     </div>
                   ))}
