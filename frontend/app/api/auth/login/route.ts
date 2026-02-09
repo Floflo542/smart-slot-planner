@@ -27,7 +27,7 @@ export async function POST(req: Request) {
 
     await ensureUsersTable();
     const rows = (await sql`
-      SELECT id, username, email, password_hash, ics_url, is_admin
+      SELECT id, username, email, password_hash, ics_url, is_admin, approved
       FROM users
       WHERE email = ${identifier} OR LOWER(username) = ${identifier}
       LIMIT 1
@@ -38,6 +38,7 @@ export async function POST(req: Request) {
       password_hash: string;
       ics_url: string;
       is_admin: boolean;
+      approved: boolean;
     }>;
 
     if (!rows.length) {
@@ -48,6 +49,12 @@ export async function POST(req: Request) {
     }
 
     const user = rows[0];
+    if (!user.approved) {
+      return NextResponse.json(
+        { ok: false, error: "Compte en attente d'approbation" },
+        { status: 403 }
+      );
+    }
     const valid = await bcrypt.compare(password, user.password_hash);
     if (!valid) {
       return NextResponse.json(

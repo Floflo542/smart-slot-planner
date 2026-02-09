@@ -21,7 +21,7 @@ export async function GET() {
   try {
     await ensureUsersTable();
     const rows = (await sql`
-      SELECT id, username, email, ics_url, is_admin, created_at
+      SELECT id, username, email, ics_url, is_admin, approved, created_at
       FROM users
       ORDER BY created_at DESC
     `) as Array<{
@@ -30,6 +30,7 @@ export async function GET() {
       email: string;
       ics_url: string;
       is_admin: boolean;
+      approved: boolean;
       created_at: string;
     }>;
     return NextResponse.json({ ok: true, items: rows });
@@ -102,6 +103,25 @@ export async function POST(req: Request) {
       await ensureUsersTable();
       const hash = await bcrypt.hash(newPassword, 10);
       await sql`UPDATE users SET password_hash = ${hash} WHERE id = ${userId}`;
+      return NextResponse.json({ ok: true });
+    }
+
+    if (action === "approve") {
+      await ensureUsersTable();
+      await sql`UPDATE users SET approved = TRUE WHERE id = ${userId}`;
+      return NextResponse.json({ ok: true });
+    }
+
+    if (action === "delete") {
+      if (userId === session.id) {
+        return NextResponse.json(
+          { ok: false, error: "Impossible de supprimer votre compte admin" },
+          { status: 400 }
+        );
+      }
+      await sql`DELETE FROM resellers WHERE user_id = ${userId}`;
+      await sql`DELETE FROM password_resets WHERE user_id = ${userId}`;
+      await sql`DELETE FROM users WHERE id = ${userId}`;
       return NextResponse.json({ ok: true });
     }
 

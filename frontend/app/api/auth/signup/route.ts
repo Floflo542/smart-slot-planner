@@ -80,22 +80,26 @@ export async function POST(req: Request) {
     const id = randomUUID();
     const isAdmin =
       email === ADMIN_EMAIL || username.toLowerCase() === "florian.monoyer";
+    const approved = isAdmin;
 
     await sql`
-      INSERT INTO users (id, username, email, password_hash, ics_url, is_admin)
-      VALUES (${id}, ${username}, ${email}, ${passwordHash}, ${icsUrl}, ${isAdmin})
+      INSERT INTO users (id, username, email, password_hash, ics_url, is_admin, approved)
+      VALUES (${id}, ${username}, ${email}, ${passwordHash}, ${icsUrl}, ${isAdmin}, ${approved})
     `;
 
-    await createSession({
-      id,
-      username,
-      email,
-      ics_url: icsUrl,
-      is_admin: isAdmin,
-    });
+    if (approved) {
+      await createSession({
+        id,
+        username,
+        email,
+        ics_url: icsUrl,
+        is_admin: isAdmin,
+      });
+    }
 
     return NextResponse.json({
       ok: true,
+      approved,
       user: { id, username, email, ics_url: icsUrl, is_admin: isAdmin },
     });
   } catch (err: any) {

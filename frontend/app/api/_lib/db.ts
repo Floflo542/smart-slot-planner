@@ -25,9 +25,12 @@ export async function ensureUsersTable() {
       password_hash TEXT NOT NULL,
       ics_url TEXT NOT NULL,
       is_admin BOOLEAN DEFAULT FALSE,
+      approved BOOLEAN DEFAULT FALSE,
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
   `;
+  await db`ALTER TABLE users ADD COLUMN IF NOT EXISTS approved BOOLEAN DEFAULT FALSE;`;
+  await db`UPDATE users SET approved = FALSE WHERE approved IS NULL;`;
 }
 
 export async function ensureResellersTable() {

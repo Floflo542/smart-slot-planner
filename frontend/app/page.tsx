@@ -926,6 +926,7 @@ export default function Home() {
       email: string;
       ics_url: string;
       is_admin: boolean;
+      approved: boolean;
       created_at: string;
     }>
   >([]);
@@ -1341,12 +1342,17 @@ export default function Home() {
         setAuthMessage(json?.error || "Creation impossible");
         return;
       }
-      setUser(json.user as AuthUser);
-      setAccountForm((prev) => ({
-        ...prev,
-        icsUrl: json.user?.ics_url || "",
-      }));
-      setAuthMessage(null);
+      if (json.approved) {
+        setUser(json.user as AuthUser);
+        setAccountForm((prev) => ({
+          ...prev,
+          icsUrl: json.user?.ics_url || "",
+        }));
+        setAuthMessage(null);
+      } else {
+        setAuthMessage("Compte cree. En attente d'approbation.");
+        setAuthMode("login");
+      }
     } catch (err: any) {
       setAuthMessage(err?.message || "Creation impossible");
     } finally {
@@ -1405,6 +1411,44 @@ export default function Home() {
       setAdminUsers(json.items || []);
     } catch (err: any) {
       setStatus(err?.message || "Impossible de charger les comptes.");
+    }
+  };
+
+  const handleAdminApprove = async (userId: string) => {
+    try {
+      const res = await fetch("/api/admin/users", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "approve", user_id: userId }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json?.ok) {
+        setStatus(json?.error || "Approbation impossible.");
+        return;
+      }
+      setStatus("Compte approuve.");
+      await loadAdminUsers();
+    } catch (err: any) {
+      setStatus(err?.message || "Approbation impossible.");
+    }
+  };
+
+  const handleAdminDelete = async (userId: string) => {
+    try {
+      const res = await fetch("/api/admin/users", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "delete", user_id: userId }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json?.ok) {
+        setStatus(json?.error || "Suppression impossible.");
+        return;
+      }
+      setStatus("Compte supprime.");
+      await loadAdminUsers();
+    } catch (err: any) {
+      setStatus(err?.message || "Suppression impossible.");
     }
   };
 
@@ -2076,7 +2120,7 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
             <div>
               <div className="status">
                 Merci de faire un mail a florian.monoyer@unox.com qui vous fera un
-                lien pour reinitialiser.
+                lien pour reinitialiser votre mot de passe.
               </div>
               <div className="row" style={{ marginTop: 14 }}>
                 <button
@@ -2789,6 +2833,9 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
                       <div className="small">{entry.email}</div>
                       <div className="small">{entry.ics_url}</div>
                       <div className="small">
+                        Statut: {entry.approved ? "Approuve" : "En attente"}
+                      </div>
+                      <div className="small">
                         Cree le {new Date(entry.created_at).toLocaleDateString("fr-FR")}
                       </div>
                       <div className="row" style={{ marginTop: 10 }}>
@@ -2798,6 +2845,22 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
                           onClick={() => handleAdminResetLink(entry.id)}
                         >
                           Generer lien reset
+                        </button>
+                        {!entry.approved ? (
+                          <button
+                            className="btn ghost"
+                            type="button"
+                            onClick={() => handleAdminApprove(entry.id)}
+                          >
+                            Approuver
+                          </button>
+                        ) : null}
+                        <button
+                          className="btn ghost"
+                          type="button"
+                          onClick={() => handleAdminDelete(entry.id)}
+                        >
+                          Supprimer
                         </button>
                       </div>
                       <div className="row" style={{ marginTop: 10 }}>
