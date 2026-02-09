@@ -278,6 +278,16 @@ label.inline {
   background: #0d0f12;
 }
 
+.option-block.option-extra .result-card {
+  border-color: rgba(248, 113, 113, 0.65);
+  background: rgba(248, 113, 113, 0.08);
+}
+
+.option-block.option-extra .option-label,
+.option-block.option-extra .small {
+  color: #f87171;
+}
+
 .note-list {
   margin: 8px 0 0;
   padding-left: 16px;
