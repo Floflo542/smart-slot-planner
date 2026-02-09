@@ -1366,7 +1366,11 @@ export default function Home() {
         setAuthMessage(json?.error || "Envoi impossible");
         return;
       }
-      setAuthMessage("Email de réinitialisation envoyé.");
+      if (json.reset_link) {
+        setAuthMessage(`Lien de réinitialisation: ${json.reset_link}`);
+      } else {
+        setAuthMessage("Email de réinitialisation envoyé.");
+      }
     } catch (err: any) {
       setAuthMessage(err?.message || "Envoi impossible");
     } finally {

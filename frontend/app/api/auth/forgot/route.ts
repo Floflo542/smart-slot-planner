@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
 import { randomBytes, createHash, randomUUID } from "crypto";
-import { Resend } from "resend";
 import { ensureResetTable, ensureUsersTable, sql } from "../../_lib/db";
 
 export const runtime = "nodejs";
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
 const RESEND_FROM = process.env.RESEND_FROM_EMAIL || "";
+const INTERNAL_RESET_MODE = process.env.INTERNAL_RESET_MODE === "true";
 
 function resolveBaseUrl() {
   if (process.env.APP_BASE_URL) return process.env.APP_BASE_URL;
@@ -22,12 +22,7 @@ export async function POST(req: Request) {
       { status: 500 }
     );
   }
-  if (!RESEND_API_KEY || !RESEND_FROM) {
-    return NextResponse.json(
-      { ok: false, error: "RESEND_API_KEY ou RESEND_FROM_EMAIL manquant" },
-      { status: 500 }
-    );
-  }
+  const emailEnabled = Boolean(RESEND_API_KEY && RESEND_FROM);
 
   try {
     const payload = await req.json();
@@ -69,15 +64,19 @@ export async function POST(req: Request) {
     }
 
     const resetLink = `${baseUrl.replace(/\/$/, "")}/reset?token=${rawToken}`;
-    const resend = new Resend(RESEND_API_KEY);
-    await resend.emails.send({
-      from: RESEND_FROM,
-      to: email,
-      subject: "Réinitialisation de mot de passe",
-      html: `<p>Bonjour ${user.username},</p><p>Voici votre lien de réinitialisation :</p><p><a href="${resetLink}">${resetLink}</a></p><p>Ce lien expire dans 1 heure.</p>`,
-    });
+    if (emailEnabled && !INTERNAL_RESET_MODE) {
+      const { Resend } = await import("resend");
+      const resend = new Resend(RESEND_API_KEY);
+      await resend.emails.send({
+        from: RESEND_FROM,
+        to: email,
+        subject: "Réinitialisation de mot de passe",
+        html: `<p>Bonjour ${user.username},</p><p>Voici votre lien de réinitialisation :</p><p><a href="${resetLink}">${resetLink}</a></p><p>Ce lien expire dans 1 heure.</p>`,
+      });
+      return NextResponse.json({ ok: true });
+    }
 
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true, reset_link: resetLink });
   } catch (err: any) {
     return NextResponse.json(
       { ok: false, error: err?.message || "Erreur envoi email" },
