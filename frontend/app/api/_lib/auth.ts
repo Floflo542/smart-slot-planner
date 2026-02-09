@@ -29,7 +29,8 @@ export async function createSession(user: SessionUser) {
     .setExpirationTime("7d")
     .sign(encoder.encode(AUTH_SECRET));
 
-  cookies().set(SESSION_COOKIE, token, {
+  const store = await cookies();
+  store.set(SESSION_COOKIE, token, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
@@ -41,7 +42,8 @@ export async function getSession(): Promise<SessionUser | null> {
   if (!AUTH_SECRET) {
     return null;
   }
-  const token = cookies().get(SESSION_COOKIE)?.value;
+  const store = await cookies();
+  const token = store.get(SESSION_COOKIE)?.value;
   if (!token) return null;
   try {
     const { payload } = await jwtVerify(token, encoder.encode(AUTH_SECRET));
@@ -58,8 +60,9 @@ export async function getSession(): Promise<SessionUser | null> {
   }
 }
 
-export function clearSession() {
-  cookies().set(SESSION_COOKIE, "", {
+export async function clearSession() {
+  const store = await cookies();
+  store.set(SESSION_COOKIE, "", {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
