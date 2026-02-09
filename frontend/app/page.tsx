@@ -914,7 +914,6 @@ export default function Home() {
     password: "",
     icsUrl: "",
   });
-  const [forgotEmail, setForgotEmail] = useState("");
   const [accountForm, setAccountForm] = useState({
     icsUrl: "",
     currentPassword: "",
@@ -1350,33 +1349,6 @@ export default function Home() {
       setAuthMessage(null);
     } catch (err: any) {
       setAuthMessage(err?.message || "Creation impossible");
-    } finally {
-      setAuthLoading(false);
-    }
-  };
-
-  const handleForgot = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setAuthLoading(true);
-    setAuthMessage(null);
-    try {
-      const res = await fetch("/api/auth/forgot", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ email: forgotEmail }),
-      });
-      const json = await res.json();
-      if (!res.ok || !json?.ok) {
-        setAuthMessage(json?.error || "Envoi impossible");
-        return;
-      }
-      if (json.reset_link) {
-        setAuthMessage(`Lien de réinitialisation: ${json.reset_link}`);
-      } else {
-        setAuthMessage("Email de réinitialisation envoyé.");
-      }
-    } catch (err: any) {
-      setAuthMessage(err?.message || "Envoi impossible");
     } finally {
       setAuthLoading(false);
     }
@@ -2101,19 +2073,12 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
           ) : null}
 
           {authMode === "forgot" ? (
-            <form onSubmit={handleForgot}>
-              <div className="field">
-                <label>Email</label>
-                <input
-                  type="email"
-                  value={forgotEmail}
-                  onChange={(e) => setForgotEmail(e.target.value)}
-                />
+            <div>
+              <div className="status">
+                Merci de faire un mail a florian.monoyer@unox.com qui vous fera un
+                lien pour reinitialiser.
               </div>
               <div className="row" style={{ marginTop: 14 }}>
-                <button className="btn primary" type="submit" disabled={authLoading}>
-                  Envoyer le lien
-                </button>
                 <button
                   className="btn ghost"
                   type="button"
@@ -2122,7 +2087,7 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
                   Retour
                 </button>
               </div>
-            </form>
+            </div>
           ) : null}
 
           {authMode === "signup" ? (
