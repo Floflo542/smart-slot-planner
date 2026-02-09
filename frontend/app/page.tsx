@@ -18,7 +18,6 @@ const CALENDAR_RANGE_DAYS = 30;
 const TRAFFIC_MARGIN = 1.0;
 const TRAFFIC_BUFFER_MIN = 5;
 const SLOT_STEP_MIN = 5;
-const EXTRA_WINDOW_MIN = 30;
 const EXTRA_TRAVEL_MAX = 30;
 const ADMIN_WINDOWS = [
   { start: "09:00", end: "11:00" },
@@ -1973,7 +1972,6 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
         const dateStr = localDateString(day);
         let dayStart = parseDateTime(dateStr, userDayStart);
         const dayEnd = parseDateTime(dateStr, userDayEnd);
-        const dayEndExtended = addMinutes(dayEnd, EXTRA_WINDOW_MIN);
 
         if (isSameDay(day, now) && now.getTime() > dayStart.getTime()) {
           dayStart = new Date(Math.min(now.getTime(), dayEnd.getTime()));
@@ -1990,13 +1988,6 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
           dayEnd,
           locationMap
         );
-        const fixedExtended = await buildFixedEventsFromIcs(
-          windowEvents,
-          dayStart,
-          dayEndExtended,
-          locationMap
-        );
-
         const best = await findBestSlot({
           dayStart,
           dayEnd,
@@ -2019,31 +2010,48 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
           });
         }
 
-        const bestExtra = await findBestSlot({
-          dayStart,
-          dayEnd: dayEndExtended,
-          home,
-          appointment,
-          durationMin,
-          bufferMin,
-          fixed: fixedExtended,
-          travelMinutesFn: travelMinutesWithTraffic,
-        });
+        const lastWithLocation = [...fixed]
+          .filter((evt) => evt.location)
+          .sort((a, b) => a.end.getTime() - b.end.getTime())
+          .pop();
 
-        if (
-          bestExtra &&
-          bestExtra.end.getTime() > dayEnd.getTime() &&
-          bestExtra.end.getTime() <= dayEndExtended.getTime() &&
-          bestExtra.travelFromPrev <= EXTRA_TRAVEL_MAX &&
-          bestExtra.travelToNext <= EXTRA_TRAVEL_MAX
-        ) {
-          const extraCost = bestExtra.travelFromPrev + bestExtra.travelToNext;
-          extraCandidates.push({
-            slot: bestExtra,
-            cost: extraCost,
-            dayEvents: dayEvents.length,
-            isExtra: true,
-          });
+        if (lastWithLocation?.location) {
+          const departFromPrev = addMinutes(lastWithLocation.end, bufferMin);
+          const travelFromPrev = await travelMinutesWithTraffic(
+            lastWithLocation.location,
+            appointment,
+            departFromPrev
+          );
+          const candidateStart = roundUpToMinutes(
+            addMinutes(departFromPrev, travelFromPrev),
+            SLOT_STEP_MIN
+          );
+          const candidateEnd = addMinutes(candidateStart, durationMin);
+
+          if (
+            travelFromPrev <= EXTRA_TRAVEL_MAX &&
+            candidateEnd.getTime() > dayEnd.getTime()
+          ) {
+            const travelToNext = await travelMinutesWithTraffic(
+              appointment,
+              home,
+              candidateEnd
+            );
+            extraCandidates.push({
+              slot: {
+                start: candidateStart,
+                end: candidateEnd,
+                travelFromPrev,
+                travelToNext,
+                prevLabel: lastWithLocation.label,
+                nextLabel: "fin",
+                notes: [],
+              },
+              cost: travelFromPrev + travelToNext,
+              dayEvents: dayEvents.length,
+              isExtra: true,
+            });
+          }
         }
       }
 
@@ -2087,7 +2095,7 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
         }
         if (candidate.isExtra) {
           notes.push(
-            `Option supplementaire (hors horaires, +${EXTRA_WINDOW_MIN} min max, trajets <= ${EXTRA_TRAVEL_MAX} min).`
+            `Option supplementaire (<= ${EXTRA_TRAVEL_MAX} min du dernier RDV).`
           );
         }
         return notes;
