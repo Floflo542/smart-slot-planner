@@ -2594,10 +2594,18 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
                         <div style={{ fontSize: 20, fontWeight: 600 }}>
                           {slot.travelFromPrev} min depuis{" "}
                           {renderTravelLabel(slot.prevLabel, "départ")}
+                          <span className="arrival-time">
+                            {" "}
+                            arrivée {formatHHMM(slot.start)}
+                          </span>
                         </div>
                         <div className="small">
                           {slot.travelToNext} min vers{" "}
                           {renderTravelLabel(slot.nextLabel, "fin")}
+                          <span className="arrival-time">
+                            {" "}
+                            arrivée {formatHHMM(addMinutes(slot.end, slot.travelToNext))}
+                          </span>
                         </div>
                       </div>
                     </div>

@@ -454,6 +454,11 @@ label.inline {
   font-weight: 700;
 }
 
+.arrival-time {
+  color: #60a5fa;
+  font-weight: 700;
+}
+
 @media (max-width: 900px) {
   .grid {
     grid-template-columns: 1fr;
