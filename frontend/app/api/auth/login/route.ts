@@ -4,6 +4,7 @@ import { createSession } from "../../_lib/auth";
 import { ensureUsersTable, sql } from "../../_lib/db";
 
 export const runtime = "nodejs";
+const ADMIN_EMAIL = "florian.monoyer@unox.com";
 
 export async function POST(req: Request) {
   if (!sql) {
@@ -49,6 +50,13 @@ export async function POST(req: Request) {
     }
 
     const user = rows[0];
+    const isAdmin =
+      user.email === ADMIN_EMAIL || user.username.toLowerCase() === "florian.monoyer";
+    if (!user.approved && isAdmin) {
+      await sql`UPDATE users SET approved = TRUE, is_admin = TRUE WHERE id = ${user.id}`;
+      user.approved = true;
+      user.is_admin = true;
+    }
     if (!user.approved) {
       return NextResponse.json(
         { ok: false, error: "Compte en attente d'approbation" },
