@@ -152,17 +152,8 @@ function buildStaticMapUrl(points: GeoPoint[]) {
 
 const MAX_GEOCODE_LOCATIONS = Number.POSITIVE_INFINITY;
 const MAX_MAP_MARKERS = 40;
-const COMMERCIALS = [
-  {
-    name: "Florian Monoyer",
-    icsUrl:
-      "https://outlook.office365.com/owa/calendar/df8485983c5d4b38b8bbf8800a546eec@unox.com/9d9e207ca6414d4ca8be7c0f3070313715591987231137818096/calendar.ics",
-  },
-] as const;
 
 type VisitType = keyof typeof DURATION_MIN;
-type Commercial = (typeof COMMERCIALS)[number]["name"];
-
 type GeoPoint = {
   label: string;
   lat: number;
@@ -194,7 +185,7 @@ type SlotOption = {
   cost: number;
 };
 
-type TabKey = "planner" | "report" | "calendar" | "resellers";
+type TabKey = "planner" | "report" | "calendar" | "resellers" | "account";
 
 type Reseller = {
   id: string;
@@ -265,7 +256,6 @@ type CalendarData = {
 };
 
 type FormState = {
-  commercial: Commercial;
   appointmentAddress: string;
   appointmentTitle: string;
   type: VisitType;
@@ -273,6 +263,14 @@ type FormState = {
   searchDays: string;
   includeWeekends: boolean;
   optimizeMode: "travel" | "earliest";
+};
+
+type AuthUser = {
+  id: string;
+  username: string;
+  email: string;
+  ics_url: string;
+  is_admin: boolean;
 };
 
 function localDateString(date = new Date()) {
@@ -900,9 +898,40 @@ export default function Home() {
     address: "",
     notes: "",
   });
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [authMode, setAuthMode] = useState<"login" | "signup" | "forgot">(
+    "login"
+  );
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authMessage, setAuthMessage] = useState<string | null>(null);
+  const [loginForm, setLoginForm] = useState({
+    identifier: "",
+    password: "",
+  });
+  const [signupForm, setSignupForm] = useState({
+    username: "",
+    email: "",
+    password: "",
+    icsUrl: "",
+  });
+  const [forgotEmail, setForgotEmail] = useState("");
+  const [accountForm, setAccountForm] = useState({
+    icsUrl: "",
+    currentPassword: "",
+    newPassword: "",
+  });
+  const [adminUsers, setAdminUsers] = useState<
+    Array<{
+      id: string;
+      username: string;
+      email: string;
+      ics_url: string;
+      is_admin: boolean;
+      created_at: string;
+    }>
+  >([]);
 
   const [form, setForm] = useState<FormState>({
-    commercial: "Florian Monoyer",
     appointmentAddress: "",
     appointmentTitle: "",
     type: "demo",
@@ -919,15 +948,40 @@ export default function Home() {
     () => Intl.DateTimeFormat().resolvedOptions().timeZone,
     []
   );
-  const commercialIcsUrl =
-    COMMERCIALS.find((item) => item.name === form.commercial)?.icsUrl || "";
+
+  useEffect(() => {
+    const loadSession = async () => {
+      try {
+        const res = await fetch("/api/auth/me");
+        if (!res.ok) {
+          setUser(null);
+          return;
+        }
+        const json = await res.json();
+        if (json?.ok && json?.user) {
+          setUser(json.user as AuthUser);
+          setAccountForm((prev) => ({
+            ...prev,
+            icsUrl: json.user.ics_url || "",
+          }));
+        } else {
+          setUser(null);
+        }
+      } catch {
+        setUser(null);
+      }
+    };
+    loadSession();
+  }, []);
   const activeResellers = resellers;
+  const currentIcsUrl = user?.ics_url || "";
+  const userLabel = user?.username || user?.email || "";
 
   const buildIcsPayload = (slot: BestSlot): IcsPayload => {
     const subject =
       form.appointmentTitle.trim() ||
       `${form.type.toUpperCase()} — ${form.appointmentAddress.trim()}`;
-    const description = `Commercial: ${form.commercial}\nType: ${form.type}\nAdresse: ${form.appointmentAddress.trim()}\nTrajet estime: ${slot.travelFromPrev} min (aller) / ${slot.travelToNext} min (retour).`;
+    const description = `Commercial: ${userLabel}\nType: ${form.type}\nAdresse: ${form.appointmentAddress.trim()}\nTrajet estime: ${slot.travelFromPrev} min (aller) / ${slot.travelToNext} min (retour).`;
     return {
       summary: subject,
       location: form.appointmentAddress.trim(),
@@ -942,15 +996,15 @@ export default function Home() {
     return {
       summary: `REVENDEUR — ${reseller.name}`,
       location: reseller.address,
-      description: `Commercial: ${form.commercial}\nType: revendeur\nAdresse: ${reseller.address}\nTrajet estime: ${slot.travelFromPrev} min (aller) / ${slot.travelToNext} min (retour).`,
+      description: `Commercial: ${userLabel}\nType: revendeur\nAdresse: ${reseller.address}\nTrajet estime: ${slot.travelFromPrev} min (aller) / ${slot.travelToNext} min (retour).`,
     };
   };
 
   const buildAdminIcsPayload = (window: AdminWindow): IcsPayload => {
     return {
-      summary: `ADMIN — ${form.commercial}`,
+      summary: `ADMIN — ${userLabel}`,
       location: "Administration",
-      description: `Commercial: ${form.commercial}\nType: admin\nFenetre: ${window.label}`,
+      description: `Commercial: ${userLabel}\nType: admin\nFenetre: ${window.label}`,
     };
   };
 
@@ -1009,12 +1063,10 @@ export default function Home() {
     await loadCalendarWindow(CALENDAR_RANGE_DAYS, false);
   };
 
-  const loadResellers = async (commercial: Commercial) => {
+  const loadResellers = async () => {
     setResellersLoading(true);
     try {
-      const res = await fetch(
-        `/api/resellers?commercial=${encodeURIComponent(commercial)}`
-      );
+      const res = await fetch("/api/resellers");
       const json = await res.json();
       if (!res.ok || !json?.ok) {
         setStatus(json?.error || "Impossible de charger les revendeurs.");
@@ -1034,10 +1086,10 @@ export default function Home() {
   };
 
   useEffect(() => {
-    if (activeTab === "resellers") {
-      loadResellers(form.commercial);
+    if (activeTab === "resellers" && user) {
+      loadResellers();
     }
-  }, [activeTab, form.commercial]);
+  }, [activeTab, user?.id]);
 
   const buildReportItems = async (
     calendar: CalendarData,
@@ -1231,10 +1283,149 @@ export default function Home() {
   const handleAnalyzeReport = async () => {
     const calendar = await loadCalendarWindow(CALENDAR_RANGE_DAYS, false);
     if (!calendar) return;
-    const resellersForReport = await loadResellers(form.commercial);
+    const resellersForReport = await loadResellers();
     const items = await buildReportItems(calendar, resellersForReport);
     setReportItems(items);
     setStatus("Rapport mis a jour.");
+  };
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthLoading(true);
+    setAuthMessage(null);
+    try {
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(loginForm),
+      });
+      const json = await res.json();
+      if (!res.ok || !json?.ok) {
+        setAuthMessage(json?.error || "Connexion impossible");
+        return;
+      }
+      setUser(json.user as AuthUser);
+      setAccountForm((prev) => ({
+        ...prev,
+        icsUrl: json.user?.ics_url || "",
+      }));
+      setAuthMode("login");
+      setAuthMessage(null);
+    } catch (err: any) {
+      setAuthMessage(err?.message || "Connexion impossible");
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleSignup = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthLoading(true);
+    setAuthMessage(null);
+    try {
+      const res = await fetch("/api/auth/signup", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          username: signupForm.username,
+          email: signupForm.email,
+          password: signupForm.password,
+          ics_url: signupForm.icsUrl,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json?.ok) {
+        setAuthMessage(json?.error || "Creation impossible");
+        return;
+      }
+      setUser(json.user as AuthUser);
+      setAccountForm((prev) => ({
+        ...prev,
+        icsUrl: json.user?.ics_url || "",
+      }));
+      setAuthMessage(null);
+    } catch (err: any) {
+      setAuthMessage(err?.message || "Creation impossible");
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleForgot = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthLoading(true);
+    setAuthMessage(null);
+    try {
+      const res = await fetch("/api/auth/forgot", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: forgotEmail }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json?.ok) {
+        setAuthMessage(json?.error || "Envoi impossible");
+        return;
+      }
+      setAuthMessage("Email de réinitialisation envoyé.");
+    } catch (err: any) {
+      setAuthMessage(err?.message || "Envoi impossible");
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    await fetch("/api/auth/logout", { method: "POST" });
+    setUser(null);
+    setActiveTab("planner");
+  };
+
+  const handleAccountUpdate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setStatus("Mise a jour du compte...");
+    try {
+      const res = await fetch("/api/auth/me", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ics_url: accountForm.icsUrl,
+          current_password: accountForm.currentPassword,
+          new_password: accountForm.newPassword,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json?.ok) {
+        setStatus(json?.error || "Mise a jour impossible.");
+        return;
+      }
+      if (json.user) {
+        setUser(json.user as AuthUser);
+      }
+      setAccountForm((prev) => ({
+        ...prev,
+        currentPassword: "",
+        newPassword: "",
+        icsUrl: json.user?.ics_url || prev.icsUrl,
+      }));
+      setStatus("Compte mis a jour.");
+    } catch (err: any) {
+      setStatus(err?.message || "Mise a jour impossible.");
+    }
+  };
+
+  const loadAdminUsers = async () => {
+    if (!user?.is_admin) return;
+    try {
+      const res = await fetch("/api/admin/users");
+      const json = await res.json();
+      if (!res.ok || !json?.ok) {
+        setStatus(json?.error || "Impossible de charger les comptes.");
+        return;
+      }
+      setAdminUsers(json.items || []);
+    } catch (err: any) {
+      setStatus(err?.message || "Impossible de charger les comptes.");
+    }
   };
 
   const handleAddReseller = () => {
@@ -1245,7 +1436,6 @@ export default function Home() {
       return;
     }
     const payload = {
-      commercial: form.commercial,
       name,
       address,
       notes: resellerDraft.notes.trim() || undefined,
@@ -1263,7 +1453,7 @@ export default function Home() {
         }
         setResellerDraft({ name: "", address: "", notes: "" });
         setStatus("Revendeur ajoute.");
-        await loadResellers(form.commercial);
+        await loadResellers();
       })
       .catch((err) => {
         setStatus(`Erreur: ${err?.message || String(err)}`);
@@ -1495,14 +1685,14 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
     searchDays: number,
     includeWeekends: boolean
   ) {
-    if (!commercialIcsUrl.trim()) {
-      setStatus("Aucun calendrier disponible pour ce commercial.");
+    if (!currentIcsUrl.trim()) {
+      setStatus("Lien ICS manquant pour ce compte.");
       return null;
     }
 
     setStatus("Chargement du calendrier ICS...");
     const res = await fetch(
-      `/api/ics?url=${encodeURIComponent(commercialIcsUrl)}`
+      `/api/ics?url=${encodeURIComponent(currentIcsUrl)}`
     );
     if (!res.ok) {
       setStatus("Impossible de charger le lien ICS.");
@@ -1571,6 +1761,11 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
     e.preventDefault();
     setStatus("Analyse du meilleur créneau...");
     setOptions([]);
+
+    if (!user) {
+      setStatus("Connectez-vous pour accéder au planning.");
+      return;
+    }
 
     if (!form.appointmentAddress.trim()) {
       setStatus("Adresse du RDV manquante.");
@@ -1784,6 +1979,192 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
     return <span>{label || fallback}</span>;
   };
 
+  if (!user) {
+    return (
+      <main className="page">
+        <div className="topbar">
+          <img className="logo" src="/unox-logo.png" alt="Unox" />
+        </div>
+        <header className="hero">
+          <div className="eyebrow">Acces commercial</div>
+          <h1>Smart Slot Planner</h1>
+          <p>Connectez-vous pour acceder a votre calendrier et vos revendeurs.</p>
+        </header>
+
+        <section className="card">
+          <div className="card-title">
+            {authMode === "login"
+              ? "Connexion"
+              : authMode === "signup"
+                ? "Creer un compte"
+                : "Mot de passe oublie"}
+          </div>
+
+          {authMessage ? <div className="status">{authMessage}</div> : null}
+
+          {authMode === "login" ? (
+            <form onSubmit={handleLogin}>
+              <div className="grid">
+                <div className="field">
+                  <label>Utilisateur ou email</label>
+                  <input
+                    type="text"
+                    value={loginForm.identifier}
+                    onChange={(e) =>
+                      setLoginForm({ ...loginForm, identifier: e.target.value })
+                    }
+                  />
+                </div>
+                <div className="field">
+                  <label>Mot de passe</label>
+                  <input
+                    type="password"
+                    value={loginForm.password}
+                    onChange={(e) =>
+                      setLoginForm({ ...loginForm, password: e.target.value })
+                    }
+                  />
+                </div>
+              </div>
+              <div className="row" style={{ marginTop: 14 }}>
+                <button className="btn primary" type="submit" disabled={authLoading}>
+                  Se connecter
+                </button>
+                <button
+                  className="btn ghost"
+                  type="button"
+                  onClick={() => setAuthMode("forgot")}
+                  disabled={authLoading}
+                >
+                  Mot de passe oublie
+                </button>
+                <button
+                  className="btn ghost"
+                  type="button"
+                  onClick={() => setAuthMode("signup")}
+                  disabled={authLoading}
+                >
+                  Creer un compte
+                </button>
+              </div>
+            </form>
+          ) : null}
+
+          {authMode === "forgot" ? (
+            <form onSubmit={handleForgot}>
+              <div className="field">
+                <label>Email</label>
+                <input
+                  type="email"
+                  value={forgotEmail}
+                  onChange={(e) => setForgotEmail(e.target.value)}
+                />
+              </div>
+              <div className="row" style={{ marginTop: 14 }}>
+                <button className="btn primary" type="submit" disabled={authLoading}>
+                  Envoyer le lien
+                </button>
+                <button
+                  className="btn ghost"
+                  type="button"
+                  onClick={() => setAuthMode("login")}
+                >
+                  Retour
+                </button>
+              </div>
+            </form>
+          ) : null}
+
+          {authMode === "signup" ? (
+            <form onSubmit={handleSignup}>
+              <div className="grid">
+                <div className="field">
+                  <label>Nom utilisateur (prenom.nom)</label>
+                  <input
+                    type="text"
+                    value={signupForm.username}
+                    onChange={(e) =>
+                      setSignupForm({ ...signupForm, username: e.target.value })
+                    }
+                  />
+                </div>
+                <div className="field">
+                  <label>Email</label>
+                  <input
+                    type="email"
+                    value={signupForm.email}
+                    onChange={(e) =>
+                      setSignupForm({ ...signupForm, email: e.target.value })
+                    }
+                  />
+                </div>
+                <div className="field">
+                  <label>Mot de passe</label>
+                  <input
+                    type="password"
+                    value={signupForm.password}
+                    onChange={(e) =>
+                      setSignupForm({ ...signupForm, password: e.target.value })
+                    }
+                  />
+                </div>
+                <div className="field">
+                  <label>Lien ICS</label>
+                  <input
+                    type="text"
+                    placeholder="https://outlook.office365.com/..."
+                    value={signupForm.icsUrl}
+                    onChange={(e) =>
+                      setSignupForm({ ...signupForm, icsUrl: e.target.value })
+                    }
+                  />
+                </div>
+              </div>
+
+              <div className="info-box" style={{ marginTop: 14 }}>
+                <div className="info-header">
+                  <div className="info-icon">O</div>
+                  <div>Obtenir le lien ICS Outlook</div>
+                </div>
+                <ol className="info-steps">
+                  <li>
+                    Mode Calendrier → Parametres → Calendrier.
+                  </li>
+                  <li>
+                    Calendriers partages → Publication de calendrier.
+                  </li>
+                  <li>
+                    Selectionnez le calendrier + autorisations.
+                  </li>
+                  <li>
+                    Enregistrer, puis copier le lien ICS.
+                  </li>
+                </ol>
+                <div className="small">
+                  Lien ICS = abonnement avec mises a jour. Lien HTML = lecture
+                  simple dans un navigateur.
+                </div>
+              </div>
+
+              <div className="row" style={{ marginTop: 14 }}>
+                <button className="btn primary" type="submit" disabled={authLoading}>
+                  Creer le compte
+                </button>
+                <button
+                  className="btn ghost"
+                  type="button"
+                  onClick={() => setAuthMode("login")}
+                >
+                  Retour
+                </button>
+              </div>
+            </form>
+          ) : null}
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className="page">
       <div className="topbar">
@@ -1827,6 +2208,13 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
         >
           Revendeurs
         </button>
+        <button
+          className={`tab ${activeTab === "account" ? "active" : ""}`}
+          type="button"
+          onClick={() => setActiveTab("account")}
+        >
+          Compte
+        </button>
       </div>
 
       <section className="card">
@@ -1836,30 +2224,6 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
 
       {activeTab === "planner" ? (
         <>
-          <section className="card">
-            <div className="card-title">Commercial</div>
-            <div className="grid">
-              <div className="field">
-                <label>Selection</label>
-                <select
-                  value={form.commercial}
-                  onChange={(e) =>
-                    setForm({
-                      ...form,
-                      commercial: e.target.value as Commercial,
-                    })
-                  }
-                >
-                  {COMMERCIALS.map((item) => (
-                    <option key={item.name} value={item.name}>
-                      {item.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-          </section>
-
           <section className="card">
             <div className="card-title">Nouveau RDV</div>
             <form onSubmit={handleSubmit}>
@@ -2264,24 +2628,6 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
           <div className="card-title">Revendeurs</div>
           <div className="grid">
             <div className="field">
-              <label>Commercial</label>
-              <select
-                value={form.commercial}
-                onChange={(e) =>
-                  setForm({
-                    ...form,
-                    commercial: e.target.value as Commercial,
-                  })
-                }
-              >
-                {COMMERCIALS.map((item) => (
-                  <option key={item.name} value={item.name}>
-                    {item.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="field">
               <label>Nom du revendeur</label>
               <input
                 type="text"
@@ -2338,6 +2684,107 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
             )}
           </div>
         </section>
+      ) : null}
+
+      {activeTab === "account" ? (
+        <>
+          <section className="card">
+            <div className="card-title">Mon compte</div>
+            <div className="grid">
+              <div className="field">
+                <label>Utilisateur</label>
+                <input type="text" value={user.username} disabled />
+              </div>
+              <div className="field">
+                <label>Email</label>
+                <input type="text" value={user.email} disabled />
+              </div>
+            </div>
+            <form onSubmit={handleAccountUpdate} style={{ marginTop: 14 }}>
+              <div className="grid">
+                <div className="field">
+                  <label>Lien ICS</label>
+                  <input
+                    type="text"
+                    value={accountForm.icsUrl}
+                    onChange={(e) =>
+                      setAccountForm({ ...accountForm, icsUrl: e.target.value })
+                    }
+                  />
+                </div>
+                <div className="field">
+                  <label>Mot de passe actuel</label>
+                  <input
+                    type="password"
+                    value={accountForm.currentPassword}
+                    onChange={(e) =>
+                      setAccountForm({
+                        ...accountForm,
+                        currentPassword: e.target.value,
+                      })
+                    }
+                  />
+                </div>
+                <div className="field">
+                  <label>Nouveau mot de passe</label>
+                  <input
+                    type="password"
+                    value={accountForm.newPassword}
+                    onChange={(e) =>
+                      setAccountForm({
+                        ...accountForm,
+                        newPassword: e.target.value,
+                      })
+                    }
+                  />
+                </div>
+              </div>
+              <div className="row" style={{ marginTop: 14 }}>
+                <button className="btn primary" type="submit">
+                  Mettre a jour
+                </button>
+                <button
+                  className="btn ghost"
+                  type="button"
+                  onClick={handleLogout}
+                >
+                  Se deconnecter
+                </button>
+              </div>
+            </form>
+          </section>
+
+          {user.is_admin ? (
+            <section className="card">
+              <div className="card-title">Admin (comptes)</div>
+              <div className="row" style={{ marginBottom: 12 }}>
+                <button
+                  className="btn ghost"
+                  type="button"
+                  onClick={loadAdminUsers}
+                >
+                  Charger les comptes
+                </button>
+              </div>
+              {adminUsers.length ? (
+                <div className="report-list">
+                  {adminUsers.map((entry) => (
+                    <div key={entry.id} className="report-card">
+                      <div className="report-date">{entry.username}</div>
+                      <div className="small">{entry.email}</div>
+                      <div className="small">{entry.ics_url}</div>
+                      <div className="small">
+                        Cree le {new Date(entry.created_at).toLocaleDateString("fr-FR")}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="small">Aucun compte charge.</div>
+              )}
+            </section>
+          ) : null}
+        </>
       ) : null}
     </main>
   );

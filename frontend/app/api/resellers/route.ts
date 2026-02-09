@@ -1,43 +1,11 @@
 import { NextResponse } from "next/server";
-import { neon } from "@neondatabase/serverless";
 import { randomUUID } from "crypto";
+import { getSession } from "../_lib/auth";
+import { ensureResellersTable, sql } from "../_lib/db";
 
 export const runtime = "nodejs";
 
-const DATABASE_URL =
-  process.env.DATABASE_URL ||
-  process.env.POSTGRES_URL ||
-  process.env.POSTGRES_PRISMA_URL ||
-  "";
-
-const sql = DATABASE_URL ? neon(DATABASE_URL) : null;
-
-async function ensureTable() {
-  if (!sql) {
-    throw new Error("DATABASE_URL manquant");
-  }
-  await sql`
-    CREATE TABLE IF NOT EXISTS resellers (
-      id TEXT PRIMARY KEY,
-      commercial TEXT NOT NULL,
-      name TEXT NOT NULL,
-      address TEXT NOT NULL,
-      notes TEXT,
-      created_at TIMESTAMPTZ DEFAULT NOW()
-    );
-  `;
-}
-
-export async function GET(req: Request) {
-  const { searchParams } = new URL(req.url);
-  const commercial = (searchParams.get("commercial") || "").trim();
-  if (!commercial) {
-    return NextResponse.json(
-      { ok: false, error: "Parametre commercial manquant" },
-      { status: 400 }
-    );
-  }
-
+export async function GET() {
   if (!sql) {
     return NextResponse.json(
       { ok: false, error: "DATABASE_URL manquant" },
@@ -45,16 +13,23 @@ export async function GET(req: Request) {
     );
   }
 
+  const session = await getSession();
+  if (!session) {
+    return NextResponse.json(
+      { ok: false, error: "Non authentifie" },
+      { status: 401 }
+    );
+  }
+
   try {
-    await ensureTable();
+    await ensureResellersTable();
     const rows = (await sql`
-      SELECT id, commercial, name, address, notes
+      SELECT id, name, address, notes
       FROM resellers
-      WHERE commercial = ${commercial}
+      WHERE user_id = ${session.id}
       ORDER BY created_at DESC
     `) as Array<{
       id: string;
-      commercial: string;
       name: string;
       address: string;
       notes: string | null;
@@ -76,29 +51,36 @@ export async function POST(req: Request) {
     );
   }
 
+  const session = await getSession();
+  if (!session) {
+    return NextResponse.json(
+      { ok: false, error: "Non authentifie" },
+      { status: 401 }
+    );
+  }
+
   try {
     const payload = await req.json();
-    const commercial = String(payload?.commercial || "").trim();
     const name = String(payload?.name || "").trim();
     const address = String(payload?.address || "").trim();
     const notes = payload?.notes ? String(payload.notes).trim() : null;
 
-    if (!commercial || !name || !address) {
+    if (!name || !address) {
       return NextResponse.json(
         { ok: false, error: "Champs manquants" },
         { status: 400 }
       );
     }
 
-    await ensureTable();
+    await ensureResellersTable();
     const id = randomUUID();
     await sql`
-      INSERT INTO resellers (id, commercial, name, address, notes)
-      VALUES (${id}, ${commercial}, ${name}, ${address}, ${notes})
+      INSERT INTO resellers (id, user_id, name, address, notes)
+      VALUES (${id}, ${session.id}, ${name}, ${address}, ${notes})
     `;
     return NextResponse.json({
       ok: true,
-      item: { id, commercial, name, address, notes },
+      item: { id, name, address, notes },
     });
   } catch (err: any) {
     return NextResponse.json(
