@@ -28,7 +28,7 @@ export async function POST(req: Request) {
 
     await ensureUsersTable();
     const rows = (await sql`
-      SELECT id, username, email, password_hash, ics_url, is_admin, approved
+      SELECT id, username, email, password_hash, ics_url, home_address, day_start, day_end, is_admin, approved
       FROM users
       WHERE email = ${identifier} OR LOWER(username) = ${identifier}
       LIMIT 1
@@ -38,6 +38,9 @@ export async function POST(req: Request) {
       email: string;
       password_hash: string;
       ics_url: string;
+      home_address: string;
+      day_start: string;
+      day_end: string;
       is_admin: boolean;
       approved: boolean;
     }>;
@@ -76,6 +79,9 @@ export async function POST(req: Request) {
       username: user.username,
       email: user.email,
       ics_url: user.ics_url,
+      home_address: user.home_address,
+      day_start: user.day_start,
+      day_end: user.day_end,
       is_admin: Boolean(user.is_admin),
     });
 
@@ -86,6 +92,9 @@ export async function POST(req: Request) {
         username: user.username,
         email: user.email,
         ics_url: user.ics_url,
+        home_address: user.home_address,
+        day_start: user.day_start,
+        day_end: user.day_end,
         is_admin: Boolean(user.is_admin),
       },
     });

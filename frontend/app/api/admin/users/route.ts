@@ -21,7 +21,7 @@ export async function GET() {
   try {
     await ensureUsersTable();
     const rows = (await sql`
-      SELECT id, username, email, ics_url, is_admin, approved, created_at
+      SELECT id, username, email, ics_url, home_address, day_start, day_end, is_admin, approved, created_at
       FROM users
       ORDER BY created_at DESC
     `) as Array<{
@@ -29,6 +29,9 @@ export async function GET() {
       username: string;
       email: string;
       ics_url: string;
+      home_address: string;
+      day_start: string;
+      day_end: string;
       is_admin: boolean;
       approved: boolean;
       created_at: string;

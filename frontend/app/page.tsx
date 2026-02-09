@@ -9,7 +9,6 @@ const DURATION_MIN = {
 } as const;
 
 const DEFAULT_HOME_ADDRESS = "Rue du Viaduc 83, 7850 Enghien, Belgique";
-const DEFAULT_HOME_COORDS = { lat: 50.695, lon: 4.04 };
 const DEFAULT_DAY_START = "07:30";
 const DEFAULT_DAY_END = "16:30";
 const DEFAULT_BUFFER_MIN = 10;
@@ -23,6 +22,19 @@ const ADMIN_WINDOWS = [
   { start: "14:00", end: "17:00" },
 ] as const;
 const MAX_RESELLERS_PER_DAY = 3;
+
+function isValidTime(value?: string) {
+  return Boolean(value && /^\d{2}:\d{2}$/.test(value));
+}
+
+function resolveWorkHours(start?: string, end?: string) {
+  const safeStart = isValidTime(start) ? (start as string) : DEFAULT_DAY_START;
+  const safeEnd = isValidTime(end) ? (end as string) : DEFAULT_DAY_END;
+  if (safeStart >= safeEnd) {
+    return { start: DEFAULT_DAY_START, end: DEFAULT_DAY_END };
+  }
+  return { start: safeStart, end: safeEnd };
+}
 
 function normalizeLocationKey(value: string) {
   return value
@@ -270,6 +282,9 @@ type AuthUser = {
   username: string;
   email: string;
   ics_url: string;
+  home_address: string;
+  day_start: string;
+  day_end: string;
   is_admin: boolean;
 };
 
@@ -913,9 +928,15 @@ export default function Home() {
     email: "",
     password: "",
     icsUrl: "",
+    homeAddress: "",
+    dayStart: DEFAULT_DAY_START,
+    dayEnd: DEFAULT_DAY_END,
   });
   const [accountForm, setAccountForm] = useState({
     icsUrl: "",
+    homeAddress: "",
+    dayStart: DEFAULT_DAY_START,
+    dayEnd: DEFAULT_DAY_END,
     currentPassword: "",
     newPassword: "",
   });
@@ -925,6 +946,9 @@ export default function Home() {
       username: string;
       email: string;
       ics_url: string;
+      home_address: string;
+      day_start: string;
+      day_end: string;
       is_admin: boolean;
       approved: boolean;
       created_at: string;
@@ -967,6 +991,9 @@ export default function Home() {
           setAccountForm((prev) => ({
             ...prev,
             icsUrl: json.user.ics_url || "",
+            homeAddress: json.user.home_address || "",
+            dayStart: json.user.day_start || DEFAULT_DAY_START,
+            dayEnd: json.user.day_end || DEFAULT_DAY_END,
           }));
         } else {
           setUser(null);
@@ -980,6 +1007,10 @@ export default function Home() {
   const activeResellers = resellers;
   const currentIcsUrl = user?.ics_url || "";
   const userLabel = user?.username || user?.email || "";
+  const workHours = resolveWorkHours(user?.day_start, user?.day_end);
+  const userDayStart = workHours.start;
+  const userDayEnd = workHours.end;
+  const userHomeAddress = user?.home_address?.trim() || "";
 
   const buildIcsPayload = (slot: BestSlot): IcsPayload => {
     const subject =
@@ -1101,16 +1132,16 @@ export default function Home() {
   ) => {
     const items: ReportItem[] = [];
     const resellerPoints = new Map<string, GeoPoint | null>();
-    let homePoint: GeoPoint = {
-      label: DEFAULT_HOME_ADDRESS,
-      lat: DEFAULT_HOME_COORDS.lat,
-      lon: DEFAULT_HOME_COORDS.lon,
-    };
-
-    try {
-      homePoint = await geocodeAddress(DEFAULT_HOME_ADDRESS);
-    } catch {
-      // fallback to default coords
+    let homePoint: GeoPoint | null = null;
+    const homeAddress = userHomeAddress.trim();
+    if (!homeAddress) {
+      setStatus("Adresse du domicile manquante. Mettez-la dans Compte.");
+    } else {
+      try {
+        homePoint = await geocodeAddress(homeAddress);
+      } catch {
+        setStatus(`Adresse du domicile introuvable: ${homeAddress}`);
+      }
     }
 
     if (resellersForReport.length) {
@@ -1134,8 +1165,8 @@ export default function Home() {
       setStatus(`Analyse du rapport (${index + 1}/${calendar.days.length})...`);
 
       const dateStr = localDateString(day);
-      const dayStart = parseDateTime(dateStr, DEFAULT_DAY_START);
-      const dayEnd = parseDateTime(dateStr, DEFAULT_DAY_END);
+      const dayStart = parseDateTime(dateStr, userDayStart);
+      const dayEnd = parseDateTime(dateStr, userDayEnd);
       const dayEvents = filterIcsEventsForDay(
         calendar.windowEvents,
         dayStart,
@@ -1192,7 +1223,7 @@ export default function Home() {
           }))
           .filter((entry) => entry.point);
 
-        if (resellerCandidates.length) {
+        if (resellerCandidates.length && homePoint) {
           const ranked = [...resellerCandidates].sort((a, b) => {
             if (!dayPoints.length) return 0;
             const distanceA = Math.min(
@@ -1312,6 +1343,9 @@ export default function Home() {
       setAccountForm((prev) => ({
         ...prev,
         icsUrl: json.user?.ics_url || "",
+        homeAddress: json.user?.home_address || "",
+        dayStart: json.user?.day_start || DEFAULT_DAY_START,
+        dayEnd: json.user?.day_end || DEFAULT_DAY_END,
       }));
       setAuthMode("login");
       setAuthMessage(null);
@@ -1335,6 +1369,9 @@ export default function Home() {
           email: signupForm.email,
           password: signupForm.password,
           ics_url: signupForm.icsUrl,
+          home_address: signupForm.homeAddress,
+          day_start: signupForm.dayStart,
+          day_end: signupForm.dayEnd,
         }),
       });
       const json = await res.json();
@@ -1347,6 +1384,9 @@ export default function Home() {
         setAccountForm((prev) => ({
           ...prev,
           icsUrl: json.user?.ics_url || "",
+          homeAddress: json.user?.home_address || "",
+          dayStart: json.user?.day_start || DEFAULT_DAY_START,
+          dayEnd: json.user?.day_end || DEFAULT_DAY_END,
         }));
         setAuthMessage(null);
       } else {
@@ -1375,6 +1415,9 @@ export default function Home() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           ics_url: accountForm.icsUrl,
+          home_address: accountForm.homeAddress,
+          day_start: accountForm.dayStart,
+          day_end: accountForm.dayEnd,
           current_password: accountForm.currentPassword,
           new_password: accountForm.newPassword,
         }),
@@ -1392,6 +1435,9 @@ export default function Home() {
         currentPassword: "",
         newPassword: "",
         icsUrl: json.user?.ics_url || prev.icsUrl,
+        homeAddress: json.user?.home_address || prev.homeAddress,
+        dayStart: json.user?.day_start || prev.dayStart,
+        dayEnd: json.user?.day_end || prev.dayEnd,
       }));
       setStatus("Compte mis a jour.");
     } catch (err: any) {
@@ -1795,11 +1841,11 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
 
     const rangeStart = parseDateTime(
       localDateString(days[0]),
-      DEFAULT_DAY_START
+      userDayStart
     );
     const rangeEnd = parseDateTime(
       localDateString(days[days.length - 1]),
-      DEFAULT_DAY_END
+      userDayEnd
     );
     const windowEvents = filterIcsEventsForRange(
       events,
@@ -1859,16 +1905,16 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
       let appointment: GeoPoint;
       let homeNote: string | null = null;
 
+      const homeAddress = userHomeAddress.trim();
+      if (!homeAddress) {
+        setStatus("Adresse du domicile manquante. Mettez-la dans Compte.");
+        return;
+      }
       try {
-        home = await geocodeAddress(DEFAULT_HOME_ADDRESS);
+        home = await geocodeAddress(homeAddress);
       } catch {
-        home = {
-          label: DEFAULT_HOME_ADDRESS,
-          lat: DEFAULT_HOME_COORDS.lat,
-          lon: DEFAULT_HOME_COORDS.lon,
-        };
-        homeNote =
-          "Adresse de depart introuvable: utilisation du centre d'Enghien.";
+        setStatus(`Adresse du domicile introuvable: ${homeAddress}`);
+        return;
       }
 
       try {
@@ -1897,8 +1943,8 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
 
       for (const day of candidates) {
         const dateStr = localDateString(day);
-        let dayStart = parseDateTime(dateStr, DEFAULT_DAY_START);
-        const dayEnd = parseDateTime(dateStr, DEFAULT_DAY_END);
+        let dayStart = parseDateTime(dateStr, userDayStart);
+        const dayEnd = parseDateTime(dateStr, userDayEnd);
 
         if (isSameDay(day, now) && now.getTime() > dayStart.getTime()) {
           dayStart = new Date(Math.min(now.getTime(), dayEnd.getTime()));
@@ -2001,10 +2047,10 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
   const calendarDayEvents = useMemo(() => {
     if (!calendarData || !activeCalendarDay) return [];
     const dateStr = localDateString(activeCalendarDay);
-    const dayStart = parseDateTime(dateStr, DEFAULT_DAY_START);
-    const dayEnd = parseDateTime(dateStr, DEFAULT_DAY_END);
+    const dayStart = parseDateTime(dateStr, userDayStart);
+    const dayEnd = parseDateTime(dateStr, userDayEnd);
     return filterIcsEventsForDay(calendarData.windowEvents, dayStart, dayEnd);
-  }, [calendarData, activeCalendarDay]);
+  }, [calendarData, activeCalendarDay, userDayStart, userDayEnd]);
 
   const calendarPoints = useMemo(() => {
     if (!calendarData) return [];
@@ -2175,6 +2221,40 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
                     value={signupForm.icsUrl}
                     onChange={(e) =>
                       setSignupForm({ ...signupForm, icsUrl: e.target.value })
+                    }
+                  />
+                </div>
+                <div className="field">
+                  <label>Adresse du domicile</label>
+                  <input
+                    type="text"
+                    placeholder={DEFAULT_HOME_ADDRESS}
+                    value={signupForm.homeAddress}
+                    onChange={(e) =>
+                      setSignupForm({
+                        ...signupForm,
+                        homeAddress: e.target.value,
+                      })
+                    }
+                  />
+                </div>
+                <div className="field">
+                  <label>Heure debut</label>
+                  <input
+                    type="time"
+                    value={signupForm.dayStart}
+                    onChange={(e) =>
+                      setSignupForm({ ...signupForm, dayStart: e.target.value })
+                    }
+                  />
+                </div>
+                <div className="field">
+                  <label>Heure fin</label>
+                  <input
+                    type="time"
+                    value={signupForm.dayEnd}
+                    onChange={(e) =>
+                      setSignupForm({ ...signupForm, dayEnd: e.target.value })
                     }
                   />
                 </div>
@@ -2622,8 +2702,8 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
               <div className="calendar-days">
                 {calendarDays.map((day) => {
                   const dateStr = localDateString(day);
-                  const dayStart = parseDateTime(dateStr, DEFAULT_DAY_START);
-                  const dayEnd = parseDateTime(dateStr, DEFAULT_DAY_END);
+                  const dayStart = parseDateTime(dateStr, userDayStart);
+                  const dayEnd = parseDateTime(dateStr, userDayEnd);
                   const count = filterIcsEventsForDay(
                     calendarData.windowEvents,
                     dayStart,
@@ -2772,6 +2852,45 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
                   />
                 </div>
                 <div className="field">
+                  <label>Adresse du domicile</label>
+                  <input
+                    type="text"
+                    value={accountForm.homeAddress}
+                    onChange={(e) =>
+                      setAccountForm({
+                        ...accountForm,
+                        homeAddress: e.target.value,
+                      })
+                    }
+                  />
+                </div>
+                <div className="field">
+                  <label>Heure debut</label>
+                  <input
+                    type="time"
+                    value={accountForm.dayStart}
+                    onChange={(e) =>
+                      setAccountForm({
+                        ...accountForm,
+                        dayStart: e.target.value,
+                      })
+                    }
+                  />
+                </div>
+                <div className="field">
+                  <label>Heure fin</label>
+                  <input
+                    type="time"
+                    value={accountForm.dayEnd}
+                    onChange={(e) =>
+                      setAccountForm({
+                        ...accountForm,
+                        dayEnd: e.target.value,
+                      })
+                    }
+                  />
+                </div>
+                <div className="field">
                   <label>Mot de passe actuel</label>
                   <input
                     type="password"
@@ -2832,6 +2951,12 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
                       <div className="report-date">{entry.username}</div>
                       <div className="small">{entry.email}</div>
                       <div className="small">{entry.ics_url}</div>
+                      <div className="small">
+                        Domicile: {entry.home_address || "—"}
+                      </div>
+                      <div className="small">
+                        Horaires: {entry.day_start || "—"} - {entry.day_end || "—"}
+                      </div>
                       <div className="small">
                         Statut: {entry.approved ? "Approuve" : "En attente"}
                       </div>

@@ -34,8 +34,11 @@ export async function POST(req: Request) {
     const email = String(payload?.email || "").trim().toLowerCase();
     const password = String(payload?.password || "").trim();
     const icsUrl = String(payload?.ics_url || payload?.icsUrl || "").trim();
+    const homeAddress = String(payload?.home_address || payload?.homeAddress || "").trim();
+    const dayStart = String(payload?.day_start || payload?.dayStart || "").trim();
+    const dayEnd = String(payload?.day_end || payload?.dayEnd || "").trim();
 
-    if (!username || !email || !password || !icsUrl) {
+    if (!username || !email || !password || !icsUrl || !homeAddress || !dayStart || !dayEnd) {
       return NextResponse.json(
         { ok: false, error: "Champs manquants" },
         { status: 400 }
@@ -65,6 +68,18 @@ export async function POST(req: Request) {
         { status: 400 }
       );
     }
+    if (!/^\d{2}:\d{2}$/.test(dayStart) || !/^\d{2}:\d{2}$/.test(dayEnd)) {
+      return NextResponse.json(
+        { ok: false, error: "Horaires invalides (HH:MM)" },
+        { status: 400 }
+      );
+    }
+    if (dayStart >= dayEnd) {
+      return NextResponse.json(
+        { ok: false, error: "L'heure de fin doit etre apres l'heure de debut" },
+        { status: 400 }
+      );
+    }
 
     await ensureUsersTable();
     const exists =
@@ -83,8 +98,8 @@ export async function POST(req: Request) {
     const approved = isAdmin;
 
     await sql`
-      INSERT INTO users (id, username, email, password_hash, ics_url, is_admin, approved)
-      VALUES (${id}, ${username}, ${email}, ${passwordHash}, ${icsUrl}, ${isAdmin}, ${approved})
+      INSERT INTO users (id, username, email, password_hash, ics_url, home_address, day_start, day_end, is_admin, approved)
+      VALUES (${id}, ${username}, ${email}, ${passwordHash}, ${icsUrl}, ${homeAddress}, ${dayStart}, ${dayEnd}, ${isAdmin}, ${approved})
     `;
 
     if (approved) {
@@ -93,6 +108,9 @@ export async function POST(req: Request) {
         username,
         email,
         ics_url: icsUrl,
+        home_address: homeAddress,
+        day_start: dayStart,
+        day_end: dayEnd,
         is_admin: isAdmin,
       });
     }
@@ -100,7 +118,16 @@ export async function POST(req: Request) {
     return NextResponse.json({
       ok: true,
       approved,
-      user: { id, username, email, ics_url: icsUrl, is_admin: isAdmin },
+      user: {
+        id,
+        username,
+        email,
+        ics_url: icsUrl,
+        home_address: homeAddress,
+        day_start: dayStart,
+        day_end: dayEnd,
+        is_admin: isAdmin,
+      },
     });
   } catch (err: any) {
     return NextResponse.json(

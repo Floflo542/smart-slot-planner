@@ -28,6 +28,11 @@ export async function PATCH(req: Request) {
   try {
     const payload = await req.json();
     const icsUrl = payload?.ics_url ? String(payload.ics_url).trim() : "";
+    const homeAddress = payload?.home_address
+      ? String(payload.home_address).trim()
+      : "";
+    const dayStart = payload?.day_start ? String(payload.day_start).trim() : "";
+    const dayEnd = payload?.day_end ? String(payload.day_end).trim() : "";
     const currentPassword = payload?.current_password
       ? String(payload.current_password).trim()
       : "";
@@ -73,6 +78,37 @@ export async function PATCH(req: Request) {
       }
       await sql`UPDATE users SET ics_url = ${icsUrl} WHERE id = ${session.id}`;
       session.ics_url = icsUrl;
+    }
+
+    if (homeAddress) {
+      await sql`UPDATE users SET home_address = ${homeAddress} WHERE id = ${session.id}`;
+      session.home_address = homeAddress;
+    }
+
+    if (dayStart || dayEnd) {
+      if (!/^\d{2}:\d{2}$/.test(dayStart || session.day_start)) {
+        return NextResponse.json(
+          { ok: false, error: "Heure debut invalide (HH:MM)" },
+          { status: 400 }
+        );
+      }
+      if (!/^\d{2}:\d{2}$/.test(dayEnd || session.day_end)) {
+        return NextResponse.json(
+          { ok: false, error: "Heure fin invalide (HH:MM)" },
+          { status: 400 }
+        );
+      }
+      const nextStart = dayStart || session.day_start;
+      const nextEnd = dayEnd || session.day_end;
+      if (nextStart >= nextEnd) {
+        return NextResponse.json(
+          { ok: false, error: "L'heure de fin doit etre apres l'heure de debut" },
+          { status: 400 }
+        );
+      }
+      await sql`UPDATE users SET day_start = ${nextStart}, day_end = ${nextEnd} WHERE id = ${session.id}`;
+      session.day_start = nextStart;
+      session.day_end = nextEnd;
     }
 
     await createSession(session);

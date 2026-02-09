@@ -24,6 +24,9 @@ export async function ensureUsersTable() {
       email TEXT UNIQUE NOT NULL,
       password_hash TEXT NOT NULL,
       ics_url TEXT NOT NULL,
+      home_address TEXT NOT NULL,
+      day_start TEXT NOT NULL,
+      day_end TEXT NOT NULL,
       is_admin BOOLEAN DEFAULT FALSE,
       approved BOOLEAN DEFAULT FALSE,
       created_at TIMESTAMPTZ DEFAULT NOW()
@@ -31,6 +34,12 @@ export async function ensureUsersTable() {
   `;
   await db`ALTER TABLE users ADD COLUMN IF NOT EXISTS approved BOOLEAN DEFAULT FALSE;`;
   await db`UPDATE users SET approved = FALSE WHERE approved IS NULL;`;
+  await db`ALTER TABLE users ADD COLUMN IF NOT EXISTS home_address TEXT;`;
+  await db`ALTER TABLE users ADD COLUMN IF NOT EXISTS day_start TEXT;`;
+  await db`ALTER TABLE users ADD COLUMN IF NOT EXISTS day_end TEXT;`;
+  await db`UPDATE users SET home_address = COALESCE(home_address, '') WHERE home_address IS NULL;`;
+  await db`UPDATE users SET day_start = COALESCE(day_start, '07:30') WHERE day_start IS NULL;`;
+  await db`UPDATE users SET day_end = COALESCE(day_end, '16:30') WHERE day_end IS NULL;`;
 }
 
 export async function ensureResellersTable() {

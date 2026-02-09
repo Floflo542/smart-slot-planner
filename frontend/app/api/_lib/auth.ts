@@ -6,6 +6,9 @@ export type SessionUser = {
   username: string;
   email: string;
   ics_url: string;
+  home_address: string;
+  day_start: string;
+  day_end: string;
   is_admin: boolean;
 };
 
@@ -22,6 +25,9 @@ export async function createSession(user: SessionUser) {
     username: user.username,
     email: user.email,
     ics_url: user.ics_url,
+    home_address: user.home_address,
+    day_start: user.day_start,
+    day_end: user.day_end,
     is_admin: user.is_admin,
   })
     .setProtectedHeader({ alg: "HS256" })
@@ -53,6 +59,9 @@ export async function getSession(): Promise<SessionUser | null> {
       username: String(payload.username || ""),
       email: String(payload.email || ""),
       ics_url: String(payload.ics_url || ""),
+      home_address: String(payload.home_address || ""),
+      day_start: String(payload.day_start || ""),
+      day_end: String(payload.day_end || ""),
       is_admin: Boolean(payload.is_admin),
     };
   } catch {
