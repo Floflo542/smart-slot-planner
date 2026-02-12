@@ -24,6 +24,15 @@ const ADMIN_WINDOWS = [
   { start: "14:00", end: "17:00" },
 ] as const;
 const MAX_RESELLERS_PER_DAY = 3;
+const WEEKDAY_LABELS = [
+  "Dimanche",
+  "Lundi",
+  "Mardi",
+  "Mercredi",
+  "Jeudi",
+  "Vendredi",
+  "Samedi",
+] as const;
 
 function isValidTime(value?: string) {
   return Boolean(value && /^\d{2}:\d{2}$/.test(value));
@@ -210,6 +219,7 @@ type SlotOption = {
   slot: BestSlot;
   dayEvents: number;
   cost: number;
+  day: Date;
   isExtra?: boolean;
 };
 
@@ -290,6 +300,7 @@ type FormState = {
   durationMin: string;
   searchDays: string;
   includeWeekends: boolean;
+  preferredDays: number[];
   optimizeMode: "travel" | "earliest";
 };
 
@@ -988,6 +999,7 @@ export default function Home() {
     durationMin: "",
     searchDays: String(DEFAULT_SEARCH_DAYS),
     includeWeekends: false,
+    preferredDays: [],
     optimizeMode: "travel",
   });
 
@@ -1430,6 +1442,18 @@ export default function Home() {
     await fetch("/api/auth/logout", { method: "POST" });
     setUser(null);
     setActiveTab("planner");
+  };
+
+  const togglePreferredDay = (dayIndex: number) => {
+    setForm((prev) => {
+      const current = new Set(prev.preferredDays);
+      if (current.has(dayIndex)) {
+        current.delete(dayIndex);
+      } else {
+        current.add(dayIndex);
+      }
+      return { ...prev, preferredDays: Array.from(current).sort() };
+    });
   };
 
   const handleAccountUpdate = async (e: React.FormEvent) => {
@@ -2007,6 +2031,7 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
             slot: best,
             cost: travelCost,
             dayEvents: dayEvents.length,
+            day,
           });
         }
 
@@ -2049,6 +2074,7 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
               },
               cost: travelFromPrev + travelToNext,
               dayEvents: dayEvents.length,
+              day,
               isExtra: true,
             });
           }
@@ -2062,7 +2088,17 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
         return;
       }
 
+      const preferredSet =
+        form.preferredDays.length > 0 ? new Set(form.preferredDays) : null;
+      const isPreferred = (candidate: SlotOption) =>
+        preferredSet ? preferredSet.has(candidate.day.getDay()) : false;
+
       const sorted = [...slotCandidates].sort((a, b) => {
+        const aPreferred = isPreferred(a);
+        const bPreferred = isPreferred(b);
+        if (aPreferred !== bPreferred) {
+          return aPreferred ? -1 : 1;
+        }
         const aHasEvents = a.dayEvents > 0;
         const bHasEvents = b.dayEvents > 0;
         if (aHasEvents !== bHasEvents) {
@@ -2106,6 +2142,11 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
         slot: { ...candidate.slot, notes: buildNotes(candidate) },
       }));
       const sortedExtra = [...extraCandidates].sort((a, b) => {
+        const aPreferred = isPreferred(a);
+        const bPreferred = isPreferred(b);
+        if (aPreferred !== bPreferred) {
+          return aPreferred ? -1 : 1;
+        }
         if (a.cost !== b.cost) return a.cost - b.cost;
         return a.slot.start.getTime() - b.slot.start.getTime();
       });
@@ -2546,6 +2587,32 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
                   />
                   Inclure le week-end
                 </label>
+              </div>
+
+              <div className="row" style={{ marginTop: 12 }}>
+                <div className="small">Jours de preference (optionnel)</div>
+              </div>
+              <div className="row" style={{ gap: 10, flexWrap: "wrap" }}>
+                {WEEKDAY_LABELS.map((label, idx) => {
+                  const isWeekend = idx === 0 || idx === 6;
+                  const disabled = isWeekend && !form.includeWeekends;
+                  const checked = form.preferredDays.includes(idx);
+                  return (
+                    <label
+                      key={label}
+                      className="inline small"
+                      style={{ display: "flex", alignItems: "center", gap: 6 }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        disabled={disabled}
+                        onChange={() => togglePreferredDay(idx)}
+                      />
+                      {label}
+                    </label>
+                  );
+                })}
               </div>
 
               <div className="row" style={{ marginTop: 14 }}>
