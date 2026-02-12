@@ -25,13 +25,11 @@ const ADMIN_WINDOWS = [
 ] as const;
 const MAX_RESELLERS_PER_DAY = 3;
 const WEEKDAY_LABELS = [
-  "Dimanche",
   "Lundi",
   "Mardi",
   "Mercredi",
   "Jeudi",
   "Vendredi",
-  "Samedi",
 ] as const;
 
 function isValidTime(value?: string) {
@@ -2594,9 +2592,8 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
               </div>
               <div className="row" style={{ gap: 10, flexWrap: "wrap" }}>
                 {WEEKDAY_LABELS.map((label, idx) => {
-                  const isWeekend = idx === 0 || idx === 6;
-                  const disabled = isWeekend && !form.includeWeekends;
-                  const checked = form.preferredDays.includes(idx);
+                  const dayIndex = idx + 1; // Lundi=1 ... Vendredi=5
+                  const checked = form.preferredDays.includes(dayIndex);
                   return (
                     <label
                       key={label}
@@ -2606,8 +2603,7 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
                       <input
                         type="checkbox"
                         checked={checked}
-                        disabled={disabled}
-                        onChange={() => togglePreferredDay(idx)}
+                        onChange={() => togglePreferredDay(dayIndex)}
                       />
                       {label}
                     </label>
