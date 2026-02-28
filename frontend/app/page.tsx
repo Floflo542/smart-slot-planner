@@ -19,6 +19,7 @@ const TRAFFIC_MARGIN = 1.0;
 const TRAFFIC_BUFFER_MIN = 5;
 const SLOT_STEP_MIN = 5;
 const EXTRA_TRAVEL_MAX = 30;
+const RESELLER_TRAVEL_MAX = 30;
 const ADMIN_WINDOWS = [
   { start: "09:00", end: "11:00" },
   { start: "14:00", end: "17:00" },
@@ -1310,12 +1311,17 @@ export default function Home() {
           }
 
           if (best) {
-            suggestion = {
-              kind: "reseller",
-              reseller: best.reseller,
-              slot: best.slot,
-              travelCost: best.cost,
-            };
+            const isInteresting =
+              best.slot.travelFromPrev <= RESELLER_TRAVEL_MAX &&
+              best.slot.travelToNext <= RESELLER_TRAVEL_MAX;
+            if (isInteresting) {
+              suggestion = {
+                kind: "reseller",
+                reseller: best.reseller,
+                slot: best.slot,
+                travelCost: best.cost,
+              };
+            }
           }
         }
 
