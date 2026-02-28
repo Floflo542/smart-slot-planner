@@ -98,6 +98,58 @@ main.page {
   font-family: var(--font-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
+.status-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.status-label {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.status-loading .status-label {
+  color: #facc15;
+}
+
+.status-error .status-label {
+  color: #f87171;
+}
+
+.status-success .status-label {
+  color: #22d3ee;
+}
+
+.status-progress {
+  display: grid;
+  gap: 6px;
+}
+
+.status-progress-bar {
+  height: 8px;
+  background: #111418;
+  border-radius: 999px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.status-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #38bdf8, #22d3ee);
+  width: 0;
+  transition: width 0.25s ease;
+}
+
 .info-box {
   border: 1px solid var(--border);
   border-radius: 14px;
@@ -285,6 +337,10 @@ label.inline {
 
 .option-block.option-extra .option-label,
 .option-block.option-extra .small {
+  color: #f87171;
+}
+
+.option-extra-note {
   color: #f87171;
 }
 

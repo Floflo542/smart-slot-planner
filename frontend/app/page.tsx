@@ -930,6 +930,14 @@ async function findBestSlot(params: {
 
 export default function Home() {
   const [status, setStatus] = useState("Prêt.");
+  const [statusPhase, setStatusPhase] = useState<
+    "idle" | "loading" | "error" | "success"
+  >("idle");
+  const [statusProgress, setStatusProgress] = useState<{
+    current: number;
+    total: number;
+  } | null>(null);
+  const [isWorking, setIsWorking] = useState(false);
   const [options, setOptions] = useState<SlotOption[]>([]);
   const [activeTab, setActiveTab] = useState<TabKey>("planner");
   const [calendarData, setCalendarData] = useState<CalendarData | null>(null);
@@ -1004,11 +1012,36 @@ export default function Home() {
 
   const geocodeCache = useRef(new Map<string, GeoPoint | null>());
   const routeCache = useRef(new Map<string, number>());
+  const cancelRef = useRef(false);
 
   const timezone = useMemo(
     () => Intl.DateTimeFormat().resolvedOptions().timeZone,
     []
   );
+
+  const inferStatusPhase = (message: string) => {
+    const lower = message.toLowerCase();
+    if (lower.startsWith("erreur") || lower.includes("impossible")) {
+      return "error";
+    }
+    if (
+      lower.includes("chargement") ||
+      lower.includes("analyse") ||
+      lower.includes("geocodage") ||
+      lower.includes("mise a jour") ||
+      lower.includes("connexion")
+    ) {
+      return "loading";
+    }
+    if (lower.includes("annul") || lower.includes("prêt")) {
+      return "idle";
+    }
+    return "success";
+  };
+
+  useEffect(() => {
+    setStatusPhase(inferStatusPhase(status));
+  }, [status]);
 
   useEffect(() => {
     const loadSession = async () => {
@@ -1044,6 +1077,25 @@ export default function Home() {
   const userDayStart = workHours.start;
   const userDayEnd = workHours.end;
   const userHomeAddress = user?.home_address?.trim() || "";
+
+  const resetProgress = () => setStatusProgress(null);
+  const beginWork = () => {
+    cancelRef.current = false;
+    setIsWorking(true);
+  };
+  const endWork = () => {
+    setIsWorking(false);
+    resetProgress();
+  };
+  const requestCancel = () => {
+    cancelRef.current = true;
+    setStatus("Annulation en cours...");
+  };
+  const ensureNotCancelled = () => {
+    if (cancelRef.current) {
+      throw new Error("Annulé");
+    }
+  };
 
   const buildIcsPayload = (slot: BestSlot): IcsPayload => {
     const subject =
@@ -1132,7 +1184,12 @@ export default function Home() {
   };
 
   const handleLoadCalendar = async () => {
-    await loadCalendarWindow(CALENDAR_RANGE_DAYS, false);
+    beginWork();
+    try {
+      await loadCalendarWindow(CALENDAR_RANGE_DAYS, false);
+    } finally {
+      endWork();
+    }
   };
 
   const loadResellers = async () => {
@@ -1184,10 +1241,12 @@ export default function Home() {
     if (resellersForReport.length) {
       let done = 0;
       for (const reseller of resellersForReport) {
+        ensureNotCancelled();
         done += 1;
         setStatus(
           `Geocodage des revendeurs (${done}/${resellersForReport.length})...`
         );
+        setStatusProgress({ current: done, total: resellersForReport.length });
         try {
           const point = await geocodeAddress(reseller.address);
           resellerPoints.set(reseller.id, point);
@@ -1198,8 +1257,10 @@ export default function Home() {
     }
 
     for (let index = 0; index < calendar.days.length; index += 1) {
+      ensureNotCancelled();
       const day = calendar.days[index];
       setStatus(`Analyse du rapport (${index + 1}/${calendar.days.length})...`);
+      setStatusProgress({ current: index + 1, total: calendar.days.length });
 
       const dateStr = localDateString(day);
       const dayStart = parseDateTime(dateStr, userDayStart);
@@ -1358,12 +1419,23 @@ export default function Home() {
   };
 
   const handleAnalyzeReport = async () => {
-    const calendar = await loadCalendarWindow(CALENDAR_RANGE_DAYS, false);
-    if (!calendar) return;
-    const resellersForReport = await loadResellers();
-    const items = await buildReportItems(calendar, resellersForReport);
-    setReportItems(items);
-    setStatus("Rapport mis a jour.");
+    beginWork();
+    try {
+      const calendar = await loadCalendarWindow(CALENDAR_RANGE_DAYS, false);
+      if (!calendar) return;
+      const resellersForReport = await loadResellers();
+      const items = await buildReportItems(calendar, resellersForReport);
+      setReportItems(items);
+      setStatus("Rapport mis a jour.");
+    } catch (err: any) {
+      if (err?.message === "Annulé") {
+        setStatus("Analyse annulee.");
+      } else {
+        setStatus(err?.message || "Erreur rapport.");
+      }
+    } finally {
+      endWork();
+    }
   };
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -1458,6 +1530,20 @@ export default function Home() {
       }
       return { ...prev, preferredDays: Array.from(current).sort() };
     });
+  };
+
+  const handleCheckAddress = async () => {
+    if (!form.appointmentAddress.trim()) {
+      setStatus("Adresse du RDV manquante.");
+      return;
+    }
+    setStatus("Verification de l'adresse...");
+    try {
+      const point = await geocodeAddress(form.appointmentAddress.trim());
+      setStatus(`Adresse ok: ${point.label}`);
+    } catch {
+      setStatus(`Adresse introuvable: ${form.appointmentAddress.trim()}`);
+    }
   };
 
   const handleAccountUpdate = async (e: React.FormEvent) => {
@@ -1927,14 +2013,17 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
     e.preventDefault();
     setStatus("Analyse du meilleur créneau...");
     setOptions([]);
+    beginWork();
 
     if (!user) {
       setStatus("Connectez-vous pour accéder au planning.");
+      endWork();
       return;
     }
 
     if (!form.appointmentAddress.trim()) {
       setStatus("Adresse du RDV manquante.");
+      endWork();
       return;
     }
 
@@ -1944,6 +2033,7 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
 
     if (!Number.isFinite(durationMin) || durationMin <= 0) {
       setStatus("Durée invalide.");
+      endWork();
       return;
     }
 
@@ -1962,12 +2052,14 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
       const homeAddress = userHomeAddress.trim();
       if (!homeAddress) {
         setStatus("Adresse du domicile manquante. Mettez-la dans Compte.");
+        endWork();
         return;
       }
       try {
         home = await geocodeAddress(homeAddress);
       } catch {
         setStatus(`Adresse du domicile introuvable: ${homeAddress}`);
+        endWork();
         return;
       }
 
@@ -1975,6 +2067,7 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
         appointment = await geocodeAddress(form.appointmentAddress.trim());
       } catch {
         setStatus(`Adresse introuvable: ${form.appointmentAddress.trim()}`);
+        endWork();
         return;
       }
 
@@ -1983,6 +2076,7 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
         form.includeWeekends
       );
       if (!calendar) {
+        endWork();
         return;
       }
 
@@ -1995,11 +2089,15 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
 
       const slotCandidates: SlotOption[] = [];
       const extraCandidates: SlotOption[] = [];
+      let dayIndex = 0;
 
       for (const day of candidates) {
+        ensureNotCancelled();
+        dayIndex += 1;
         const dateStr = localDateString(day);
         let dayStart = parseDateTime(dateStr, userDayStart);
         const dayEnd = parseDateTime(dateStr, userDayEnd);
+        setStatusProgress({ current: dayIndex, total: candidates.length });
 
         if (isSameDay(day, now) && now.getTime() > dayStart.getTime()) {
           dayStart = new Date(Math.min(now.getTime(), dayEnd.getTime()));
@@ -2089,6 +2187,7 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
         setStatus(
           `Aucun creneau disponible sur les ${searchDays} prochains ${windowLabel}.`
         );
+        endWork();
         return;
       }
 
@@ -2170,12 +2269,24 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
         label += ` (${extraCount} supplementaire${extraCount > 1 ? "s" : ""}).`;
       }
       setStatus(label);
+      endWork();
     } catch (err: any) {
-      setStatus(`Erreur: ${err?.message || String(err)}`);
+      if (err?.message === "Annulé") {
+        setStatus("Analyse annulee.");
+      } else {
+        setStatus(`Erreur: ${err?.message || String(err)}`);
+      }
+      endWork();
     }
   }
 
   const reportDays = reportItems;
+  const reportSummary = useMemo(() => {
+    if (!reportDays.length) return null;
+    const full = reportDays.filter((d) => d.isFull).length;
+    const total = reportDays.length;
+    return { full, pending: total - full, total };
+  }, [reportDays]);
 
   const calendarDays = calendarData?.days || [];
   const activeCalendarDay = selectedCalendarDay || calendarDays[0] || null;
@@ -2493,13 +2604,53 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
 
       <section className="card">
         <div className="card-title">Statut</div>
-        <div className="status">{status}</div>
+        <div className={`status-panel status-${statusPhase}`}>
+          <div className="status-row">
+            <span className="status-label">
+              {statusPhase === "loading"
+                ? "En cours"
+                : statusPhase === "error"
+                  ? "Erreur"
+                  : statusPhase === "success"
+                    ? "Terminé"
+                    : "Prêt"}
+            </span>
+            {isWorking ? (
+              <button className="btn ghost" type="button" onClick={requestCancel}>
+                Stop
+              </button>
+            ) : null}
+          </div>
+          <div className="status">{status}</div>
+          {statusProgress ? (
+            <div className="status-progress">
+              <div className="status-progress-bar">
+                <div
+                  className="status-progress-fill"
+                  style={{
+                    width: `${Math.min(
+                      100,
+                      Math.round((statusProgress.current / statusProgress.total) * 100)
+                    )}%`,
+                  }}
+                />
+              </div>
+              <div className="small">
+                {statusProgress.current}/{statusProgress.total}
+              </div>
+            </div>
+          ) : null}
+        </div>
       </section>
 
       {activeTab === "planner" ? (
         <>
           <section className="card">
             <div className="card-title">Nouveau RDV</div>
+            <div className="small" style={{ marginBottom: 10 }}>
+              Domicile: {userHomeAddress || "—"} · Horaires: {userDayStart} -{" "}
+              {userDayEnd}
+            </div>
             <form onSubmit={handleSubmit}>
               <div className="grid">
                 <div className="field">
@@ -2552,6 +2703,14 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
                       setForm({ ...form, appointmentAddress: e.target.value })
                     }
                   />
+                  <button
+                    className="btn ghost"
+                    type="button"
+                    onClick={handleCheckAddress}
+                    style={{ marginTop: 8 }}
+                  >
+                    Verifier l'adresse
+                  </button>
                 </div>
                 <div className="field">
                   <label>Titre (optionnel)</label>
@@ -2644,6 +2803,11 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
                     style={{ marginTop: 16 }}
                   >
                     <div className="small option-label">{label}</div>
+                    {isExtra ? (
+                      <div className="small option-extra-note">
+                        Hors horaires, mais proche du dernier RDV.
+                      </div>
+                    ) : null}
                     <div className="result-grid">
                       <div className="result-card">
                         <div className="small">Date recommandee</div>
@@ -2671,6 +2835,9 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
                             {" "}
                             arrivée {formatHHMM(addMinutes(slot.end, slot.travelToNext))}
                           </span>
+                        </div>
+                        <div className="small" style={{ marginTop: 6 }}>
+                          Score: {slot.travelFromPrev + slot.travelToNext} min
                         </div>
                       </div>
                     </div>
@@ -2714,6 +2881,12 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
               Objectif: 4 TopTraining / 2 ICE / 1 ICE + 2 TopTraining
             </span>
           </div>
+          {reportSummary ? (
+            <div className="small" style={{ marginBottom: 12 }}>
+              Synthese: {reportSummary.full} jours complets,{" "}
+              {reportSummary.pending} a completer (total {reportSummary.total}).
+            </div>
+          ) : null}
           {!calendarData ? (
             <div className="small">
               Chargez le calendrier pour obtenir le rapport détaillé.
