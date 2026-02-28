@@ -1077,6 +1077,14 @@ export default function Home() {
   const userDayStart = workHours.start;
   const userDayEnd = workHours.end;
   const userHomeAddress = user?.home_address?.trim() || "";
+  const durationValue = useMemo(() => {
+    const parsed = Number.parseInt(form.durationMin, 10);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    return DURATION_MIN[form.type];
+  }, [form.durationMin, form.type]);
+  const setDurationValue = (value: number) => {
+    setForm((prev) => ({ ...prev, durationMin: String(value) }));
+  };
 
   const resetProgress = () => setStatusProgress(null);
   const beginWork = () => {
@@ -2683,15 +2691,35 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
                 </div>
                 <div className="field">
                   <label>Duree (min)</label>
-                  <input
-                    type="number"
-                    min={15}
-                    placeholder={`${DURATION_MIN[form.type]}`}
-                    value={form.durationMin}
-                    onChange={(e) =>
-                      setForm({ ...form, durationMin: e.target.value })
-                    }
-                  />
+                  <div className="duration-picker">
+                    <div className="duration-pills">
+                      {[30, 45, 60, 90, 120, 150].map((value) => (
+                        <button
+                          key={value}
+                          type="button"
+                          className={`pill-btn ${
+                            durationValue === value ? "active" : ""
+                          }`}
+                          onClick={() => setDurationValue(value)}
+                        >
+                          {value} min
+                        </button>
+                      ))}
+                    </div>
+                    <div className="duration-input">
+                      <input
+                        type="number"
+                        min={15}
+                        step={5}
+                        placeholder={`${DURATION_MIN[form.type]}`}
+                        value={form.durationMin}
+                        onChange={(e) =>
+                          setForm({ ...form, durationMin: e.target.value })
+                        }
+                      />
+                      <span className="duration-suffix">min</span>
+                    </div>
+                  </div>
                 </div>
                 <div className="field">
                   <label>Adresse du RDV</label>

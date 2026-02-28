@@ -228,6 +228,67 @@ input[type="checkbox"] {
   width: auto;
 }
 
+.duration-picker {
+  display: grid;
+  gap: 10px;
+}
+
+.duration-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.pill-btn {
+  border: 1px solid var(--border);
+  background: #0c0c0c;
+  color: var(--muted);
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.pill-btn:hover {
+  border-color: #f97316;
+  color: #fde68a;
+}
+
+.pill-btn.active {
+  border-color: #f97316;
+  background: linear-gradient(135deg, rgba(249, 115, 22, 0.25), rgba(249, 115, 22, 0.05));
+  color: #fed7aa;
+}
+
+.duration-input {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #0b0b0b;
+}
+
+.duration-input input[type="number"] {
+  border: none;
+  padding: 0;
+  background: transparent;
+}
+
+.duration-input input[type="number"]:focus {
+  outline: none;
+}
+
+.duration-suffix {
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
 label.inline {
   text-transform: none;
   letter-spacing: 0;
