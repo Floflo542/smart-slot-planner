@@ -12,6 +12,9 @@
   --border: rgba(148, 163, 184, 0.14);
   --shadow: 0 30px 70px rgba(2, 6, 23, 0.55);
   --ring: 0 0 0 4px rgba(255, 138, 61, 0.16);
+  --card-glow: 0 22px 50px rgba(2, 6, 23, 0.5);
+  --surface: rgba(12, 16, 22, 0.82);
+  --surface-2: rgba(16, 22, 30, 0.9);
 
   --font-sans: "Space Grotesk", "Avenir Next", "Segoe UI", sans-serif;
   --font-mono: "JetBrains Mono", "SFMono-Regular", "Menlo", monospace;
@@ -24,6 +27,7 @@
 body {
   margin: 0;
   min-height: 100vh;
+  color-scheme: dark;
   background:
     radial-gradient(1200px 500px at 0% -10%, rgba(255, 138, 61, 0.16), transparent 60%),
     radial-gradient(1000px 600px at 100% 0%, rgba(96, 223, 245, 0.18), transparent 55%),
@@ -51,6 +55,16 @@ main.page {
   z-index: 1;
 }
 
+::selection {
+  background: rgba(255, 138, 61, 0.35);
+  color: #0b0b0b;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
 main.page {
   max-width: 1180px;
   margin: 0 auto;
@@ -69,6 +83,7 @@ main.page {
   width: 120px;
   height: auto;
   display: block;
+  filter: drop-shadow(0 8px 30px rgba(255, 138, 61, 0.25));
 }
 
 .hero {
@@ -103,6 +118,12 @@ main.page {
   padding: 22px 24px;
   box-shadow: var(--shadow);
   backdrop-filter: blur(12px);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--card-glow);
 }
 
 .card-title {
@@ -122,7 +143,11 @@ main.page {
 
 .status-panel {
   display: grid;
-  gap: 10px;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: rgba(10, 12, 16, 0.9);
+  border: 1px solid rgba(148, 163, 184, 0.14);
 }
 
 .status-row {
@@ -138,6 +163,9 @@ main.page {
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--muted);
+  background: rgba(148, 163, 184, 0.1);
+  padding: 4px 10px;
+  border-radius: 999px;
 }
 
 .status-loading .status-label {
@@ -152,6 +180,16 @@ main.page {
   color: #22d3ee;
 }
 
+.status-message {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(15, 19, 26, 0.9);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  font-size: 13px;
+  line-height: 1.4;
+  letter-spacing: 0.01em;
+}
+
 .status-progress {
   display: grid;
   gap: 6px;
@@ -159,7 +197,7 @@ main.page {
 
 .status-progress-bar {
   height: 8px;
-  background: #111418;
+  background: rgba(15, 19, 26, 0.9);
   border-radius: 999px;
   overflow: hidden;
   border: 1px solid var(--border);
@@ -238,7 +276,7 @@ textarea {
   padding: 12px 14px;
   font-size: 14px;
   font-family: var(--font-sans), system-ui, sans-serif;
-  background: rgba(9, 12, 16, 0.9);
+  background: var(--surface);
   color: var(--ink);
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
@@ -311,7 +349,7 @@ input[type="checkbox"] {
   padding: 12px 14px;
   border: 1px solid rgba(148, 163, 184, 0.18);
   border-radius: 14px;
-  background: rgba(9, 12, 16, 0.9);
+  background: var(--surface);
 }
 
 .duration-input input[type="number"] {
@@ -448,7 +486,7 @@ label.inline {
   border: 1px solid rgba(148, 163, 184, 0.14);
   border-radius: 18px;
   padding: 14px;
-  background: rgba(12, 16, 22, 0.9);
+  background: var(--surface-2);
 }
 
 .option-block.option-extra .result-card {
@@ -480,7 +518,7 @@ label.inline {
   border: 1px solid rgba(148, 163, 184, 0.14);
   border-radius: 18px;
   padding: 16px;
-  background: rgba(12, 16, 22, 0.9);
+  background: var(--surface-2);
   display: grid;
   gap: 10px;
 }
@@ -534,7 +572,7 @@ label.inline {
   border: 1px solid rgba(148, 163, 184, 0.16);
   border-radius: 12px;
   padding: 8px 10px;
-  background: rgba(10, 12, 16, 0.9);
+  background: var(--surface-2);
 }
 
 .calendar-layout {
@@ -553,7 +591,7 @@ label.inline {
 
 .day-item {
   border: 1px solid rgba(148, 163, 184, 0.16);
-  background: rgba(10, 12, 16, 0.9);
+  background: var(--surface-2);
   color: var(--ink);
   border-radius: 16px;
   padding: 12px 14px;
@@ -600,7 +638,7 @@ label.inline {
   border: 1px solid rgba(148, 163, 184, 0.16);
   border-radius: 12px;
   padding: 8px 10px;
-  background: rgba(10, 12, 16, 0.9);
+  background: var(--surface-2);
 }
 
 .reseller-list {
@@ -613,7 +651,7 @@ label.inline {
   border: 1px solid rgba(148, 163, 184, 0.16);
   border-radius: 12px;
   padding: 10px 12px;
-  background: rgba(10, 12, 16, 0.9);
+  background: var(--surface-2);
 }
 
 .reseller-name {
@@ -634,6 +672,19 @@ label.inline {
 .arrival-time {
   color: #60a5fa;
   font-weight: 700;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.3);
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(15, 19, 26, 0.6);
 }
 
 @media (max-width: 900px) {

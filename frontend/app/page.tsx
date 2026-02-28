@@ -2629,7 +2629,7 @@ async function geocodeAddress(label: string): Promise<GeoPoint> {
               </button>
             ) : null}
           </div>
-          <div className="status">{status}</div>
+          <div className="status-message">{status}</div>
           {statusProgress ? (
             <div className="status-progress">
               <div className="status-progress-bar">
